@@ -1,5 +1,7 @@
+import errno
 import json
-import tempfile
+import os
+import stat
 
 import pytest
 
@@ -56,53 +58,39 @@ def test_state_store_rejects_corrupt_state_with_state_file_error(tmp_path, paylo
         store.load()
 
 
+def test_state_store_rejects_syntactically_malformed_json_text(tmp_path):
+    paths = resolve_paths(tmp_path)
+    paths.state_file.parent.mkdir(parents=True, exist_ok=True)
+    paths.state_file.write_text("{not json")
+    store = StateStore(paths.state_file)
+
+    with pytest.raises(StateFileError):
+        store.load()
+
+
+def test_ensure_private_dir_applies_private_permissions_to_nested_paths(tmp_path):
+    nested = tmp_path / "outer" / "inner"
+
+    fs.ensure_private_dir(nested)
+
+    assert nested.exists()
+    assert oct((tmp_path / "outer").stat().st_mode & 0o777) == "0o700"
+    assert oct(nested.stat().st_mode & 0o777) == "0o700"
+
+
 def test_atomic_write_bytes_flushes_syncs_and_cleans_up_on_failure(tmp_path, monkeypatch):
     target = tmp_path / "nested" / "state.json"
-    calls: list[tuple[str, object]] = []
-    original_named_temporary_file = tempfile.NamedTemporaryFile
-    original_fsync = fs.os.fsync
-
-    class TempProxy:
-        def __init__(self, handle):
-            self._handle = handle
-            self.flushed = False
-
-        def __enter__(self):
-            self._handle.__enter__()
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return self._handle.__exit__(exc_type, exc, tb)
-
-        def write(self, data):
-            return self._handle.write(data)
-
-        def flush(self):
-            self.flushed = True
-            calls.append(("flush", self._handle.name))
-            return self._handle.flush()
-
-        def fileno(self):
-            return self._handle.fileno()
-
-        @property
-        def name(self):
-            return self._handle.name
-
-    def wrapped_named_temporary_file(*args, **kwargs):
-        return TempProxy(original_named_temporary_file(*args, **kwargs))
+    calls: list[str] = []
+    original_fsync = os.fsync
 
     def recording_fsync(fd):
-        calls.append(("fsync", fd))
+        calls.append("fsync")
         return original_fsync(fd)
 
     def failing_replace(source, destination):
-        calls.append(("replace", source, destination))
-        assert any(entry[0] == "flush" for entry in calls)
-        assert len([entry for entry in calls if entry[0] == "fsync"]) >= 1
+        calls.append("replace")
         raise OSError("boom")
 
-    monkeypatch.setattr(fs.tempfile, "NamedTemporaryFile", wrapped_named_temporary_file)
     monkeypatch.setattr(fs.os, "fsync", recording_fsync)
     monkeypatch.setattr(fs.os, "replace", failing_replace)
 
@@ -110,55 +98,75 @@ def test_atomic_write_bytes_flushes_syncs_and_cleans_up_on_failure(tmp_path, mon
         fs.atomic_write_bytes(target, b"hello")
 
     assert list(target.parent.iterdir()) == []
-    assert any(entry[0] == "replace" for entry in calls)
-    assert len([entry for entry in calls if entry[0] == "fsync"]) >= 1
+    assert "replace" in calls
+    assert calls.count("fsync") >= 1
 
 
 def test_atomic_write_bytes_fsyncs_parent_directory_on_success(tmp_path, monkeypatch):
     target = tmp_path / "nested" / "state.json"
-    calls: list[tuple[str, object]] = []
-    original_named_temporary_file = tempfile.NamedTemporaryFile
-    original_fsync = fs.os.fsync
-
-    class TempProxy:
-        def __init__(self, handle):
-            self._handle = handle
-            self.flushed = False
-
-        def __enter__(self):
-            self._handle.__enter__()
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return self._handle.__exit__(exc_type, exc, tb)
-
-        def write(self, data):
-            return self._handle.write(data)
-
-        def flush(self):
-            self.flushed = True
-            calls.append(("flush", self._handle.name))
-            return self._handle.flush()
-
-        def fileno(self):
-            return self._handle.fileno()
-
-        @property
-        def name(self):
-            return self._handle.name
-
-    def wrapped_named_temporary_file(*args, **kwargs):
-        return TempProxy(original_named_temporary_file(*args, **kwargs))
+    calls: list[str] = []
+    original_fsync = os.fsync
 
     def recording_fsync(fd):
-        calls.append(("fsync", fd))
+        calls.append("dir-fsync" if stat.S_ISDIR(os.fstat(fd).st_mode) else "file-fsync")
         return original_fsync(fd)
 
-    monkeypatch.setattr(fs.tempfile, "NamedTemporaryFile", wrapped_named_temporary_file)
     monkeypatch.setattr(fs.os, "fsync", recording_fsync)
 
     fs.atomic_write_bytes(target, b"hello")
 
     assert target.read_bytes() == b"hello"
-    assert len([entry for entry in calls if entry[0] == "flush"]) == 1
-    assert len([entry for entry in calls if entry[0] == "fsync"]) == 2
+    assert calls.count("file-fsync") == 1
+    assert calls.count("dir-fsync") == 1
+
+
+def test_atomic_write_bytes_cleans_up_if_chmod_fails(tmp_path, monkeypatch):
+    target = tmp_path / "nested" / "state.json"
+    original_chmod = fs.os.chmod
+    calls = {"chmod": 0}
+
+    def failing_second_chmod(path, mode):
+        calls["chmod"] += 1
+        if calls["chmod"] == 2:
+            raise OSError(errno.EACCES, "chmod failed")
+        return original_chmod(path, mode)
+
+    monkeypatch.setattr(fs.os, "chmod", failing_second_chmod)
+
+    with pytest.raises(OSError):
+        fs.atomic_write_bytes(target, b"hello")
+
+    assert list(target.parent.iterdir()) == []
+
+
+def test_atomic_write_bytes_propagates_real_directory_fsync_failures(tmp_path, monkeypatch):
+    target = tmp_path / "nested" / "state.json"
+    original_fsync = os.fsync
+
+    def failing_dir_fsync(fd):
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise OSError(errno.EIO, "directory fsync failed")
+        return original_fsync(fd)
+
+    monkeypatch.setattr(fs.os, "fsync", failing_dir_fsync)
+
+    with pytest.raises(OSError, match="directory fsync failed"):
+        fs.atomic_write_bytes(target, b"hello")
+
+    assert target.read_bytes() == b"hello"
+
+
+def test_atomic_write_bytes_ignores_unsupported_directory_fsync(tmp_path, monkeypatch):
+    target = tmp_path / "nested" / "state.json"
+    original_fsync = os.fsync
+
+    def unsupported_dir_fsync(fd):
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise OSError(errno.EINVAL, "directory fsync unsupported")
+        return original_fsync(fd)
+
+    monkeypatch.setattr(fs.os, "fsync", unsupported_dir_fsync)
+
+    fs.atomic_write_bytes(target, b"hello")
+
+    assert target.read_bytes() == b"hello"
