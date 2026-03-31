@@ -17,6 +17,10 @@ class SnapshotNotFoundError(CodexSwitchError):
     pass
 
 
+class UnsafeSnapshotEntryError(CodexSwitchError):
+    pass
+
+
 class ActiveAliasRemovalError(CodexSwitchError):
     pass
 

@@ -1,7 +1,12 @@
 import pytest
 
 from codex_switch.accounts import AccountStore
-from codex_switch.errors import AliasAlreadyExistsError, InvalidAliasError, SnapshotNotFoundError
+from codex_switch.errors import (
+    AliasAlreadyExistsError,
+    InvalidAliasError,
+    SnapshotNotFoundError,
+    UnsafeSnapshotEntryError,
+)
 
 
 def test_write_and_list_snapshots(tmp_path):
@@ -98,3 +103,67 @@ def test_symlinked_accounts_directory_rejects_all_operations(tmp_path):
         store.delete("work-1")
 
     assert (external_accounts / "work-1.json").exists()
+
+
+def test_symlinked_snapshot_file_is_rejected(tmp_path):
+    accounts_dir = tmp_path / ".codex-switch" / "accounts"
+    accounts_dir.mkdir(parents=True)
+    external = tmp_path / "external.json"
+    external.write_text('{"token":"abc"}')
+    (accounts_dir / "work-1.json").symlink_to(external)
+
+    store = AccountStore(accounts_dir)
+
+    with pytest.raises(UnsafeSnapshotEntryError):
+        store.list_aliases()
+
+    with pytest.raises(UnsafeSnapshotEntryError):
+        store.exists("work-1")
+
+    with pytest.raises(UnsafeSnapshotEntryError):
+        store.read_snapshot("work-1")
+
+    with pytest.raises(UnsafeSnapshotEntryError):
+        store.delete("work-1")
+
+    assert external.exists()
+
+
+def test_broken_symlink_snapshot_entry_is_rejected(tmp_path):
+    accounts_dir = tmp_path / ".codex-switch" / "accounts"
+    accounts_dir.mkdir(parents=True)
+    (accounts_dir / "work-2.json").symlink_to(tmp_path / "missing.json")
+
+    store = AccountStore(accounts_dir)
+
+    with pytest.raises(UnsafeSnapshotEntryError):
+        store.list_aliases()
+
+    with pytest.raises(UnsafeSnapshotEntryError):
+        store.exists("work-2")
+
+    with pytest.raises(UnsafeSnapshotEntryError):
+        store.read_snapshot("work-2")
+
+    with pytest.raises(UnsafeSnapshotEntryError):
+        store.delete("work-2")
+
+
+def test_non_file_snapshot_entry_is_rejected(tmp_path):
+    accounts_dir = tmp_path / ".codex-switch" / "accounts"
+    accounts_dir.mkdir(parents=True)
+    (accounts_dir / "work-3.json").mkdir()
+
+    store = AccountStore(accounts_dir)
+
+    with pytest.raises(UnsafeSnapshotEntryError):
+        store.list_aliases()
+
+    with pytest.raises(UnsafeSnapshotEntryError):
+        store.exists("work-3")
+
+    with pytest.raises(UnsafeSnapshotEntryError):
+        store.read_snapshot("work-3")
+
+    with pytest.raises(UnsafeSnapshotEntryError):
+        store.delete("work-3")

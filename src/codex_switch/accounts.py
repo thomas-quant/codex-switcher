@@ -7,6 +7,7 @@ from codex_switch.errors import (
     AliasAlreadyExistsError,
     InvalidAliasError,
     SnapshotNotFoundError,
+    UnsafeSnapshotEntryError,
 )
 from codex_switch.fs import atomic_copy_file, atomic_write_bytes, ensure_private_dir
 
@@ -43,12 +44,23 @@ class AccountStore:
                 "Alias must match ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$"
             )
 
+    def _safe_snapshot_entry(self, alias: str) -> Path:
+        path = self.snapshot_path(alias)
+        if path.is_symlink():
+            raise UnsafeSnapshotEntryError(f"Unsafe snapshot entry: {path}")
+        if not path.exists():
+            return path
+        if not path.is_file():
+            raise UnsafeSnapshotEntryError(f"Unsafe snapshot entry: {path}")
+        return path
+
     def snapshot_path(self, alias: str) -> Path:
         self._validate_alias(alias)
         return self._safe_accounts_dir() / f"{alias}.json"
 
     def exists(self, alias: str) -> bool:
-        return self.snapshot_path(alias).exists()
+        path = self._safe_snapshot_entry(alias)
+        return path.exists()
 
     def list_aliases(self) -> list[str]:
         accounts_dir = self._safe_accounts_dir()
@@ -59,6 +71,8 @@ class AccountStore:
             alias = path.stem
             if not ALIAS_RE.fullmatch(alias):
                 raise InvalidAliasError(f"Malformed snapshot filename: {path.name}")
+            if path.is_symlink() or not path.exists() or not path.is_file():
+                raise UnsafeSnapshotEntryError(f"Unsafe snapshot entry: {path}")
             aliases.append(alias)
         return aliases
 
@@ -75,13 +89,13 @@ class AccountStore:
         atomic_write_bytes(target, payload, mode=0o600, root=root)
 
     def read_snapshot(self, alias: str) -> bytes:
-        path = self.snapshot_path(alias)
+        path = self._safe_snapshot_entry(alias)
         if not path.exists():
             raise SnapshotNotFoundError(f"Alias '{alias}' does not exist")
         return path.read_bytes()
 
     def delete(self, alias: str) -> None:
-        path = self.snapshot_path(alias)
+        path = self._safe_snapshot_entry(alias)
         if not path.exists():
             raise SnapshotNotFoundError(f"Alias '{alias}' does not exist")
         path.unlink()
