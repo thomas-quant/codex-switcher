@@ -12,10 +12,17 @@ def ensure_private_dir(path: Path, mode: int = 0o700, root: Path | None = None) 
 
     if root is not None:
         root = Path(root)
+        if root.exists() and root.is_symlink():
+            raise ValueError(f"{root} is a symlink")
         try:
             relative = path.relative_to(root)
         except ValueError as exc:
             raise ValueError(f"{path} is not under {root}") from exc
+
+        resolved_root = root.resolve(strict=False)
+        resolved_path = path.resolve(strict=False)
+        if not resolved_path.is_relative_to(resolved_root):
+            raise ValueError(f"{path} escapes {root} via symlink")
 
         root.mkdir(parents=True, exist_ok=True)
         os.chmod(root, mode)
@@ -24,6 +31,8 @@ def ensure_private_dir(path: Path, mode: int = 0o700, root: Path | None = None) 
             current = current / part
             if not current.exists():
                 current.mkdir(exist_ok=True)
+            if current.is_symlink():
+                raise ValueError(f"{current} is a symlink")
             os.chmod(current, mode)
         return
 

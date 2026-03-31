@@ -152,6 +152,21 @@ def test_atomic_write_bytes_with_root_secures_existing_ancestor(tmp_path):
     assert target.read_bytes() == b"hello"
 
 
+def test_atomic_write_bytes_rejects_symlinked_path_segments(tmp_path):
+    app_root = tmp_path / "app"
+    outside_dir = tmp_path / "outside"
+    escaped_dir = app_root / "cache"
+    target = escaped_dir / "state.json"
+    outside_dir.mkdir()
+    app_root.mkdir()
+    escaped_dir.symlink_to(outside_dir, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symlink"):
+        fs.atomic_write_bytes(target, b"hello", root=app_root)
+
+    assert not (outside_dir / "state.json").exists()
+
+
 def test_atomic_write_bytes_flushes_syncs_and_cleans_up_on_failure(tmp_path, monkeypatch):
     target = tmp_path / "nested" / "state.json"
     calls: list[str] = []
