@@ -17,6 +17,10 @@ class SnapshotNotFoundError(CodexSwitchError):
     pass
 
 
+class UnsafeAccountDirectoryError(CodexSwitchError):
+    pass
+
+
 class UnsafeSnapshotEntryError(CodexSwitchError):
     pass
 

@@ -7,6 +7,7 @@ from codex_switch.errors import (
     AliasAlreadyExistsError,
     InvalidAliasError,
     SnapshotNotFoundError,
+    UnsafeAccountDirectoryError,
     UnsafeSnapshotEntryError,
 )
 from codex_switch.fs import atomic_copy_file, atomic_write_bytes, ensure_private_dir
@@ -24,18 +25,24 @@ class AccountStore:
     def _safe_accounts_dir(self) -> Path:
         root = self._root()
         if root.exists() and root.is_symlink():
-            raise ValueError(f"{root} is a symlink")
+            raise UnsafeAccountDirectoryError(f"Unsafe account directory: {root}")
         try:
             self._accounts_dir.relative_to(root)
         except ValueError as exc:
-            raise ValueError(f"{self._accounts_dir} is not under {root}") from exc
+            raise UnsafeAccountDirectoryError(
+                f"Unsafe account directory: {self._accounts_dir}"
+            ) from exc
 
         resolved_root = root.resolve(strict=False)
         resolved_path = self._accounts_dir.resolve(strict=False)
         if not resolved_path.is_relative_to(resolved_root):
-            raise ValueError(f"{self._accounts_dir} escapes {root} via symlink")
+            raise UnsafeAccountDirectoryError(
+                f"Unsafe account directory: {self._accounts_dir}"
+            )
         if self._accounts_dir.exists() and self._accounts_dir.is_symlink():
-            raise ValueError(f"{self._accounts_dir} is a symlink")
+            raise UnsafeAccountDirectoryError(
+                f"Unsafe account directory: {self._accounts_dir}"
+            )
         return self._accounts_dir
 
     def _validate_alias(self, alias: str) -> None:

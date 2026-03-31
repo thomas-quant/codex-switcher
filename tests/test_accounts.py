@@ -5,6 +5,7 @@ from codex_switch.errors import (
     AliasAlreadyExistsError,
     InvalidAliasError,
     SnapshotNotFoundError,
+    UnsafeAccountDirectoryError,
     UnsafeSnapshotEntryError,
 )
 
@@ -40,7 +41,7 @@ def test_snapshot_writes_reject_symlink_escape(tmp_path):
 
     store = AccountStore(switch_root / "accounts")
 
-    with pytest.raises(ValueError):
+    with pytest.raises(UnsafeAccountDirectoryError):
         store.write_snapshot_from_bytes("work-1", b"{}")
 
 
@@ -90,16 +91,16 @@ def test_symlinked_accounts_directory_rejects_all_operations(tmp_path):
 
     store = AccountStore(switch_root / "accounts")
 
-    with pytest.raises(ValueError):
+    with pytest.raises(UnsafeAccountDirectoryError):
         store.list_aliases()
 
-    with pytest.raises(ValueError):
+    with pytest.raises(UnsafeAccountDirectoryError):
         store.exists("work-1")
 
-    with pytest.raises(ValueError):
+    with pytest.raises(UnsafeAccountDirectoryError):
         store.read_snapshot("work-1")
 
-    with pytest.raises(ValueError):
+    with pytest.raises(UnsafeAccountDirectoryError):
         store.delete("work-1")
 
     assert (external_accounts / "work-1.json").exists()
