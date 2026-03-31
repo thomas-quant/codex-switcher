@@ -162,7 +162,10 @@ class CodexSwitchManager:
             self._state.save(previous_state)
         except Exception as exc:
             cleanup_errors.append(exc)
-        if cleanup_errors and alias_captured and self._accounts.exists(alias):
+        alias_needs_rollback = alias_captured
+        if not alias_needs_rollback and primary_error is not None:
+            alias_needs_rollback = self._accounts.exists(alias)
+        if (primary_error is not None or cleanup_errors) and alias_needs_rollback and self._accounts.exists(alias):
             try:
                 self._accounts.delete(alias)
             except Exception as exc:

@@ -178,3 +178,28 @@ def test_add_rolls_back_captured_alias_when_cleanup_fails(tmp_path, monkeypatch)
 
     assert guard.calls == 1
     assert not accounts.exists("personal")
+
+
+def test_add_rolls_back_alias_when_snapshot_write_raises_after_writing(tmp_path, monkeypatch):
+    def login_runner() -> None:
+        paths.live_auth_file.parent.mkdir(parents=True, exist_ok=True)
+        paths.live_auth_file.write_bytes(b'{"token":"new-login"}')
+
+    manager, paths, accounts, state, guard = make_manager(tmp_path, login_runner)
+    state.save(AppState(active_alias=None, updated_at="2026-03-31T12:00:00Z"))
+    paths.live_auth_file.parent.mkdir(parents=True, exist_ok=True)
+    paths.live_auth_file.write_bytes(b'{"token":"live-before-login"}')
+
+    original_write = accounts.write_snapshot_from_file
+
+    def write_then_fail(alias, source):
+        original_write(alias, source)
+        raise OSError("fsync failed")
+
+    monkeypatch.setattr(accounts, "write_snapshot_from_file", write_then_fail)
+
+    with pytest.raises(OSError, match="fsync failed"):
+        manager.add("personal")
+
+    assert guard.calls == 1
+    assert not accounts.exists("personal")
