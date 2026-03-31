@@ -5,7 +5,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from codex_switch.errors import StateFileError
-from codex_switch.fs import atomic_write_bytes, ensure_private_dir
+from codex_switch.fs import atomic_write_bytes
 from codex_switch.models import AppState
 
 
@@ -18,17 +18,34 @@ class StateStore:
             return AppState()
 
         try:
-            payload = json.loads(self._state_file.read_text())
-        except json.JSONDecodeError as exc:
+            raw = self._state_file.read_bytes()
+            text = raw.decode("utf-8")
+            payload = json.loads(text)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise StateFileError(f"Could not parse {self._state_file}") from exc
+        except OSError as exc:
             raise StateFileError(f"Could not parse {self._state_file}") from exc
 
+        if not isinstance(payload, dict):
+            raise StateFileError(f"Could not parse {self._state_file}")
+
+        version = payload.get("version", 1)
+        active_alias = payload.get("active_alias")
+        updated_at = payload.get("updated_at")
+
+        if type(version) is not int:
+            raise StateFileError(f"Could not parse {self._state_file}")
+        if active_alias is not None and not isinstance(active_alias, str):
+            raise StateFileError(f"Could not parse {self._state_file}")
+        if updated_at is not None and not isinstance(updated_at, str):
+            raise StateFileError(f"Could not parse {self._state_file}")
+
         return AppState(
-            version=payload.get("version", 1),
-            active_alias=payload.get("active_alias"),
-            updated_at=payload.get("updated_at"),
+            version=version,
+            active_alias=active_alias,
+            updated_at=updated_at,
         )
 
     def save(self, state: AppState) -> None:
-        ensure_private_dir(self._state_file.parent)
         body = json.dumps(asdict(state), indent=2, sort_keys=True).encode("utf-8") + b"\n"
         atomic_write_bytes(self._state_file, body, mode=0o600)
