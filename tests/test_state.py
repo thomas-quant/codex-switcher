@@ -112,6 +112,16 @@ def test_state_store_reports_shape_errors_with_specific_messages(tmp_path, paylo
         store.load()
 
 
+def test_state_store_rejects_unsupported_version(tmp_path):
+    paths = resolve_paths(tmp_path)
+    paths.state_file.parent.mkdir(parents=True, exist_ok=True)
+    paths.state_file.write_text(json.dumps({"version": 2}))
+    store = StateStore(paths.state_file)
+
+    with pytest.raises(StateFileError, match=r"unsupported schema version 2"):
+        store.load()
+
+
 def test_ensure_private_dir_applies_private_permissions_to_nested_paths(tmp_path):
     nested = tmp_path / "outer" / "inner"
 

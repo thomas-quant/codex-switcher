@@ -11,6 +11,7 @@ def ensure_private_dir(path: Path, mode: int = 0o700, root: Path | None = None) 
     path = Path(path)
 
     if root is not None:
+        # When the caller owns an app root, harden that chain explicitly.
         root = Path(root)
         if root.exists() and root.is_symlink():
             raise ValueError(f"{root} is a symlink")
@@ -36,6 +37,8 @@ def ensure_private_dir(path: Path, mode: int = 0o700, root: Path | None = None) 
             os.chmod(current, mode)
         return
 
+    # Default behavior is intentionally narrow: only the provided path and any
+    # newly created descendants are chmodded. Existing ancestors are left alone.
     missing: list[Path] = []
     current = path
     while not current.exists():
@@ -87,6 +90,8 @@ def atomic_write_bytes(
     mode: int = 0o600,
     root: Path | None = None,
 ) -> None:
+    # Pass root= when writing under an app-owned tree and ancestor hardening
+    # matters; otherwise this stays narrow for the target path itself.
     ensure_private_dir(target.parent, root=root)
     temp_path: Path | None = None
     try:
@@ -110,6 +115,7 @@ def atomic_copy_file(
     mode: int = 0o600,
     root: Path | None = None,
 ) -> None:
+    # Copy uses the same narrow-or-rooted privacy contract as atomic writes.
     atomic_write_bytes(target, source.read_bytes(), mode=mode, root=root)
 
 

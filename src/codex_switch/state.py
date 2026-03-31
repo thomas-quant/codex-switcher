@@ -36,6 +36,8 @@ class StateStore:
 
         if type(version) is not int:
             raise StateFileError(f"Could not parse {self._state_file}: version must be an integer")
+        if version != 1:
+            raise StateFileError(f"Could not parse {self._state_file}: unsupported schema version {version}")
         if active_alias is not None and not isinstance(active_alias, str):
             raise StateFileError(f"Could not parse {self._state_file}: active_alias must be a string or null")
         if updated_at is not None and not isinstance(updated_at, str):
