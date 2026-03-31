@@ -4,15 +4,7 @@ import getpass
 import os
 from pathlib import Path
 
-try:
-    import psutil
-except ModuleNotFoundError:  # pragma: no cover - used only in minimal test environments
-    class _PsutilFallback:
-        @staticmethod
-        def process_iter(attrs=None):
-            return ()
-
-    psutil = _PsutilFallback()
+import psutil
 
 from codex_switch.errors import CodexProcessRunningError
 

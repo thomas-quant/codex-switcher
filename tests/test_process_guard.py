@@ -1,4 +1,5 @@
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
+import sys
 
 import getpass
 import os
@@ -6,6 +7,12 @@ import os
 import pytest
 
 from codex_switch.errors import CodexProcessRunningError
+
+if "psutil" not in sys.modules:
+    psutil_stub = ModuleType("psutil")
+    psutil_stub.process_iter = lambda attrs=None: ()
+    sys.modules["psutil"] = psutil_stub
+
 from codex_switch.process_guard import ensure_codex_not_running
 
 
