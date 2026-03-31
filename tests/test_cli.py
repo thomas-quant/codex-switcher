@@ -67,6 +67,20 @@ def test_format_status_lines_marks_dirty_state():
     ]
 
 
+def test_format_status_lines_with_no_active_alias_is_two_lines():
+    status = StatusResult(
+        active_alias=None,
+        snapshot_exists=False,
+        live_auth_exists=True,
+        in_sync=None,
+    )
+
+    assert format_status_lines(status) == [
+        "active alias: none",
+        "live auth: present",
+    ]
+
+
 def test_main_dispatches_add(monkeypatch, capsys):
     calls: list[tuple[str, str | None]] = []
 
@@ -130,6 +144,28 @@ def test_main_dispatches_remove(monkeypatch, capsys):
     assert result == 0
     assert calls == [("remove", "work")]
     assert captured.out == "removed alias: work\n"
+
+
+def test_main_dispatches_status(monkeypatch, capsys):
+    class FakeManager:
+        def status(self) -> StatusResult:
+            return StatusResult(
+                active_alias=None,
+                snapshot_exists=False,
+                live_auth_exists=True,
+                in_sync=None,
+            )
+
+    monkeypatch.setattr("codex_switch.cli.build_default_manager", lambda: FakeManager())
+
+    result = main(["status"])
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert captured.out.splitlines() == [
+        "active alias: none",
+        "live auth: present",
+    ]
 
 
 def test_main_exits_via_parser_for_user_facing_errors(monkeypatch):

@@ -46,6 +46,12 @@ def format_alias_lines(aliases: list[str], active_alias: str | None) -> list[str
 
 
 def format_status_lines(status: StatusResult) -> list[str]:
+    if status.active_alias is None:
+        return [
+            "active alias: none",
+            f"live auth: {'present' if status.live_auth_exists else 'missing'}",
+        ]
+
     if status.in_sync is True:
         sync_state = "clean"
     elif status.in_sync is False:
@@ -53,9 +59,8 @@ def format_status_lines(status: StatusResult) -> list[str]:
     else:
         sync_state = "unknown"
 
-    active_alias = status.active_alias if status.active_alias is not None else "none"
     return [
-        f"active alias: {active_alias}",
+        f"active alias: {status.active_alias}",
         f"snapshot: {'present' if status.snapshot_exists else 'missing'}",
         f"live auth: {'present' if status.live_auth_exists else 'missing'}",
         f"sync: {sync_state}",
