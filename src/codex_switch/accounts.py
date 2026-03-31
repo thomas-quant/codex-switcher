@@ -22,27 +22,27 @@ class AccountStore:
     def _root(self) -> Path:
         return self._accounts_dir.parent
 
+    def _unsafe_accounts_dir(self, path: Path) -> UnsafeAccountDirectoryError:
+        return UnsafeAccountDirectoryError(f"Unsafe account directory: {path}")
+
     def _safe_accounts_dir(self) -> Path:
         root = self._root()
-        if root.exists() and root.is_symlink():
-            raise UnsafeAccountDirectoryError(f"Unsafe account directory: {root}")
+        if root.exists():
+            if root.is_symlink() or not root.is_dir():
+                raise self._unsafe_accounts_dir(root)
         try:
             self._accounts_dir.relative_to(root)
         except ValueError as exc:
-            raise UnsafeAccountDirectoryError(
-                f"Unsafe account directory: {self._accounts_dir}"
-            ) from exc
+            raise self._unsafe_accounts_dir(self._accounts_dir) from exc
 
         resolved_root = root.resolve(strict=False)
         resolved_path = self._accounts_dir.resolve(strict=False)
         if not resolved_path.is_relative_to(resolved_root):
-            raise UnsafeAccountDirectoryError(
-                f"Unsafe account directory: {self._accounts_dir}"
-            )
-        if self._accounts_dir.exists() and self._accounts_dir.is_symlink():
-            raise UnsafeAccountDirectoryError(
-                f"Unsafe account directory: {self._accounts_dir}"
-            )
+            raise self._unsafe_accounts_dir(self._accounts_dir)
+        if self._accounts_dir.exists() and (
+            self._accounts_dir.is_symlink() or not self._accounts_dir.is_dir()
+        ):
+            raise self._unsafe_accounts_dir(self._accounts_dir)
         return self._accounts_dir
 
     def _validate_alias(self, alias: str) -> None:
