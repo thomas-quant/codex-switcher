@@ -82,16 +82,18 @@ class CodexSwitchManager:
             suffix=".json",
             dir=self._paths.live_auth_file.parent,
         )
-        os.close(fd)
         backup_path = Path(raw_path)
-        atomic_write_bytes(
-            backup_path,
-            self._paths.live_auth_file.read_bytes(),
-            mode=0o600,
-            root=self._paths.codex_root,
-        )
-        self._paths.live_auth_file.unlink()
-        return backup_path
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(self._paths.live_auth_file.read_bytes())
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.chmod(backup_path, 0o600)
+            self._paths.live_auth_file.unlink()
+            return backup_path
+        except Exception:
+            backup_path.unlink(missing_ok=True)
+            raise
 
     def _restore_previous_live_auth(self, previous_state: AppState, backup_path: Path | None) -> None:
         if (
@@ -126,6 +128,7 @@ class CodexSwitchManager:
         self._accounts.assert_missing(alias)
         previous_state = self._state.load()
         backup_path: Path | None = None
+        primary_error: Exception | None = None
 
         try:
             self._sync_active_snapshot_from_live_auth(previous_state)
@@ -134,9 +137,28 @@ class CodexSwitchManager:
             if not self._paths.live_auth_file.exists():
                 raise LoginCaptureError("codex login did not leave ~/.codex/auth.json behind")
             self._accounts.write_snapshot_from_file(alias, self._paths.live_auth_file)
-        finally:
+        except Exception as exc:
+            primary_error = exc
+
+        cleanup_errors: list[Exception] = []
+        try:
             self._restore_previous_live_auth(previous_state, backup_path)
+        except Exception as exc:
+            cleanup_errors.append(exc)
+        try:
             self._state.save(previous_state)
+        except Exception as exc:
+            cleanup_errors.append(exc)
+
+        if primary_error is not None:
+            for cleanup_error in cleanup_errors:
+                primary_error.add_note(f"Cleanup failed: {cleanup_error}")
+            raise primary_error
+
+        if len(cleanup_errors) == 1:
+            raise cleanup_errors[0]
+        if cleanup_errors:
+            raise ExceptionGroup("Multiple cleanup failures", cleanup_errors)
 
     def use(self, alias: str) -> None:
         self._ensure_safe_to_mutate()

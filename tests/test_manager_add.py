@@ -95,3 +95,43 @@ def test_add_rejects_existing_alias(tmp_path):
     assert accounts.read_snapshot("personal") == b'{"token":"existing"}'
     assert paths.live_auth_file.read_bytes() == b'{"token":"live-work"}'
     assert state.load() == AppState(active_alias=None, updated_at="2026-03-31T12:00:00Z")
+
+
+def test_add_restores_backup_when_no_active_alias(tmp_path):
+    def login_runner() -> None:
+        paths.live_auth_file.parent.mkdir(parents=True, exist_ok=True)
+        paths.live_auth_file.write_bytes(b'{"token":"new-login"}')
+
+    manager, paths, accounts, state, guard = make_manager(tmp_path, login_runner)
+    state.save(AppState(active_alias=None, updated_at="2026-03-31T12:00:00Z"))
+    paths.live_auth_file.parent.mkdir(parents=True, exist_ok=True)
+    paths.live_auth_file.write_bytes(b'{"token":"live-before-login"}')
+
+    manager.add("personal")
+
+    assert guard.calls == 1
+    assert accounts.read_snapshot("personal") == b'{"token":"new-login"}'
+    assert paths.live_auth_file.read_bytes() == b'{"token":"live-before-login"}'
+    assert state.load() == AppState(active_alias=None, updated_at="2026-03-31T12:00:00Z")
+    assert sorted(path.name for path in paths.live_auth_file.parent.iterdir()) == ["auth.json"]
+
+
+def test_add_preserves_login_failure_when_restore_also_fails(tmp_path, monkeypatch):
+    manager, paths, accounts, state, guard = make_manager(tmp_path, lambda: None)
+    state.save(AppState(active_alias=None, updated_at="2026-03-31T12:00:00Z"))
+    paths.live_auth_file.parent.mkdir(parents=True, exist_ok=True)
+    paths.live_auth_file.write_bytes(b'{"token":"live-before-login"}')
+
+    def fail_restore(_previous_state, _backup_path):
+        raise RuntimeError("restore failed")
+
+    monkeypatch.setattr(manager, "_restore_previous_live_auth", fail_restore)
+
+    with pytest.raises(
+        LoginCaptureError,
+        match=r"codex login did not leave ~/.codex/auth.json behind",
+    ) as exc_info:
+        manager.add("personal")
+
+    assert guard.calls == 1
+    assert exc_info.value.__notes__ == ["Cleanup failed: restore failed"]
