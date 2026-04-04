@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import sqlite3
 
+import pytest
+
 from codex_switch.automation_db import AutomationStore
 from codex_switch.automation_models import HandoffPhase, RateLimitSnapshot, RateLimitWindow, UsageSource
+from codex_switch.errors import AutomationDatabaseError
 from codex_switch.paths import resolve_paths
 
 
@@ -147,3 +150,16 @@ def test_store_persists_handoff_state(tmp_path):
             "2026-04-04T12:05:00Z",
         )
     ]
+
+
+def test_initialize_rejects_symlinked_db_path(tmp_path):
+    paths = resolve_paths(tmp_path)
+    store = AutomationStore(paths.automation_db_file)
+    outside_target = tmp_path / "outside" / "automation.sqlite"
+    paths.switch_root.mkdir(parents=True, exist_ok=True)
+    paths.automation_db_file.symlink_to(outside_target)
+
+    with pytest.raises(AutomationDatabaseError, match="symlink"):
+        store.initialize()
+
+    assert not outside_target.exists()

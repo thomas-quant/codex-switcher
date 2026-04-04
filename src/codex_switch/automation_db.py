@@ -188,6 +188,8 @@ class AutomationStore:
             raise AutomationDatabaseError(f"Could not access {self._db_file}: {exc}") from exc
 
     def _prepare_db_file(self) -> None:
+        if self._db_file.is_symlink():
+            raise AutomationDatabaseError(f"Unsafe automation db path: {self._db_file} is a symlink")
         ensure_private_dir(self._db_file.parent, root=self._db_file.parent)
         if self._db_file.exists():
             os.chmod(self._db_file, 0o600)
