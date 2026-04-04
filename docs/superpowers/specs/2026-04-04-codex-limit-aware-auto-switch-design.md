@@ -6,7 +6,7 @@ Date: 2026-04-04
 
 Build a limit-aware automation layer on top of `codex-switch` that monitors the active Codex account's rate limits and thread token usage, switches to a fresher account when thresholds are reached, and resumes the exact same Codex thread after restart.
 
-The v1 design keeps the user's normal `codex` entrypoint. Instead of requiring `codex-switch run`, the system uses a small local Codex companion plugin/app plus a per-user `codex-switchd` daemon. The companion observes live Codex state through the experimental local app-server protocol, and the daemon persists telemetry, applies switching policy, performs account rotation through `codex-switch`, and resumes the captured thread.
+The v1 design keeps the user's normal `codex` entrypoint and uses a per-user `codex-switchd` daemon. The daemon talks directly to the experimental local Codex app-server protocol for account identity, rate limits, thread lifecycle, and token usage. If RPC access is unavailable, the daemon falls back to a PTY-driven `/status` probe for rate-limit collection only. A minimal Codex companion plugin/app is explicitly deferred unless direct daemon integration later proves insufficient for exact-thread handoff.
 
 ## Goals
 
@@ -26,12 +26,14 @@ The v1 design keeps the user's normal `codex` entrypoint. Instead of requiring `
 - No replacement of the stock Codex TUI or CLI with a custom client in v1.
 - No support for switching multiple concurrent active Codex sessions in v1.
 - No cloud-hosted coordination service.
+- No OAuth API or ChatGPT web dashboard integration in v1.
+- No required Codex plugin for rate-limit collection in v1.
 
 ## User Model
 
 The user already manages multiple Codex aliases with `codex-switch`, for example `work-1`, `work-2`, and `backup`. One alias remains globally active at a time through `~/.codex/auth.json`.
 
-With this feature enabled, the user continues launching plain `codex`. A local Codex companion plugin/app and a background `codex-switchd` process observe the active thread and account telemetry. When the active account crosses the configured threshold or actually exhausts its limit, the daemon coordinates a safe handoff: stop Codex, switch to a fresher alias, and resume the same thread.
+With this feature enabled, the user continues launching plain `codex`. A background `codex-switchd` process observes the active thread and account telemetry through local Codex interfaces. When the active account crosses the configured threshold or actually exhausts its limit, the daemon coordinates a safe handoff: stop Codex, switch to a fresher alias, and resume the same thread.
 
 ## Why This Approach
 
@@ -39,13 +41,13 @@ Three approaches were considered:
 
 1. Require all sessions to start via `codex-switch run`.
 2. Build a full custom Codex client on the experimental app-server protocol.
-3. Keep plain `codex`, add a Codex companion plus a background daemon.
+3. Keep plain `codex`, add a background daemon that talks directly to Codex app-server and falls back to CLI PTY probing for rate-limit data.
 
-Option 3 is the chosen design. Option 1 would be simpler but changes the user's workflow. Option 2 would provide maximum control but is too large and fragile for v1. The companion-plus-daemon design gives the needed observability and control while preserving the stock Codex entrypoint.
+Option 3 is the chosen design. Option 1 would be simpler but changes the user's workflow. Option 2 would provide maximum control but is too large and fragile for v1. Direct daemon integration preserves the stock Codex entrypoint while avoiding unsupported browser scraping. If direct daemon integration later proves insufficient for trustworthy exact-thread handoff, a minimal companion can be added in a follow-up iteration.
 
 ## Architecture Overview
 
-The system is split into three responsibilities:
+The system is split into two required responsibilities:
 
 - `codex-switch`
   - remains the source of truth for alias snapshots and auth rotation
@@ -54,28 +56,46 @@ The system is split into three responsibilities:
 - `codex-switchd`
   - long-lived per-user daemon
   - persists automation state in SQLite under `~/.codex-switch/`
-  - connects to the Codex companion/app-server bridge
+  - launches or connects to local Codex app-server RPC in read-only mode
+  - falls back to PTY `/status` probes for rate-limit data when RPC is unavailable
   - applies switching policy and performs handoff orchestration
-- Codex companion plugin/app
-  - lightweight local integration loaded by Codex
-  - surfaces live thread lifecycle, token usage, and account limit updates to the daemon
-  - does not perform account switching itself
 
 This separation keeps observation, policy, and mutation isolated.
 
+A minimal Codex companion plugin/app is deferred and not part of required v1 scope. It becomes relevant only if direct daemon integration cannot observe the active thread reliably enough for exact-thread continuation.
+
 ## Codex Integration Model
 
-The design depends on the experimental local Codex app-server protocol rather than undocumented web APIs or browser automation.
+The design depends on local Codex interfaces rather than undocumented web APIs or browser automation.
 
-The companion or daemon integration must consume these protocol surfaces:
+### Usage Data Paths
 
+V1 daemon source order:
+
+1. local Codex app-server RPC for account identity, rate limits, thread lifecycle, and token usage
+2. CLI PTY `/status` probing for rate-limit windows and credits when RPC is unavailable
+
+Deferred paths:
+
+- OAuth API access via `auth.json`
+- ChatGPT web dashboard scraping
+- local session-log cost scanning for historical backfill
+
+The daemon's primary RPC path should use a local read-only app-server process equivalent to:
+
+- `codex -s read-only -a untrusted app-server`
+
+The daemon must consume these RPC surfaces when available:
+
+- `account/read`
 - `account/rateLimits/read`
 - `account/rateLimits/updated`
 - `thread/tokenUsage/updated`
 - thread lifecycle notifications sufficient to identify the active thread and safe checkpoints
-- `thread/resume` semantics or CLI-equivalent resume behavior
 
-The design assumes the daemon can obtain a stable active `thread_id` and that the exact same thread can be resumed after restart using the recorded thread identifier. If the protocol changes in a future Codex release, the daemon must fail closed rather than act on uncertain state.
+The PTY fallback sends `/status` to a Codex TTY session and parses reported credits and limit windows. PTY fallback is sufficient for keeping alias rate-limit snapshots fresh, but it is not by itself trustworthy enough for exact-thread continuation.
+
+The design assumes the daemon can obtain a stable active `thread_id` from direct RPC integration and that the exact same thread can be resumed after restart using the recorded thread identifier. If the protocol changes in a future Codex release, the daemon must fail closed rather than act on uncertain state.
 
 ## On-Disk Layout
 
@@ -123,6 +143,7 @@ Suggested fields:
 - `alias`
 - `limit_id`
 - `limit_name`
+- `observed_via`
 - `plan_type`
 - `primary_used_percent`
 - `primary_resets_at`
@@ -229,20 +250,24 @@ On daemon startup:
 1. open the automation database
 2. reconcile aliases from `codex-switch`
 3. restore any unfinished `handoff_state`
-4. connect to the Codex companion/app-server bridge
-5. query the current account via an initial rate-limit read
+4. start or connect to local Codex app-server RPC
+5. if RPC succeeds, query `account/read` and `account/rateLimits/read`
 6. subscribe to account and thread notifications
+7. if RPC is unavailable, enter degraded mode and start PTY `/status` probing for rate-limit collection only
 
-If any required telemetry channel is unavailable, the daemon records stale state and does not make switch decisions.
+If RPC is unavailable, the daemon may continue updating alias limit snapshots through PTY fallback, but it must not attempt exact-thread handoff unless it has a trustworthy active `thread_id`.
 
 ### Normal Monitoring
 
 While Codex is active, the daemon:
 
-- updates `thread_runtime` from thread lifecycle notifications
+- updates `thread_runtime` from app-server thread lifecycle notifications
 - appends token usage rows from `thread/tokenUsage/updated`
 - refreshes `account_rate_limits` from `account/rateLimits/read` and `account/rateLimits/updated`
+- uses PTY `/status` fallback only when RPC rate-limit telemetry is unavailable
 - identifies whether the current thread is at a safe checkpoint for handoff
+
+If the daemon only has PTY fallback and does not have trustworthy thread runtime visibility, it remains in observe-only mode and does not auto-switch.
 
 ### Trigger Conditions
 
@@ -255,6 +280,11 @@ Hard trigger:
 - if Codex reports a usage-limit-exceeded condition for the current turn, switch as soon as the turn has stopped
 
 The daemon must not interrupt an in-flight healthy turn merely because the soft threshold has been crossed.
+
+Automatic switching is armed only when the daemon has both:
+
+- fresh authoritative rate-limit telemetry for the active alias and candidate backup aliases
+- a trustworthy active `thread_id` and safe-checkpoint signal from RPC integration
 
 ### Target Alias Selection
 
@@ -273,6 +303,8 @@ Selection priority:
 5. earliest reset time if every alias is near exhaustion
 
 If no alias has fresh authoritative telemetry, the daemon must fail closed and notify the user rather than guess.
+
+PTY-derived snapshots are acceptable for candidate selection only when RPC-derived rate-limit data is unavailable for that alias. They are never sufficient on their own to justify exact-thread resume behavior.
 
 ## Handoff Sequence
 
@@ -296,6 +328,8 @@ For a hard-triggered switch after limit exhaustion:
 
 The daemon should prefer the stock `codex resume <thread_id>` path if it is sufficient to restore the exact thread under the new auth state.
 
+If the daemon cannot confirm a trustworthy `thread_id`, it must not perform the handoff sequence automatically.
+
 ## Failure Handling
 
 The daemon must fail closed in ambiguous states.
@@ -305,9 +339,12 @@ Expected failures and responses:
 - missing or stale rate-limit data for all backup aliases
   - refuse to switch automatically
   - record blocked state and notify the user
-- companion/plugin disconnects
-  - mark telemetry stale
-  - stop making new switching decisions
+- app-server RPC unavailable
+  - enter PTY fallback for rate-limit collection
+  - disable exact-thread auto-switch until RPC visibility returns
+- PTY `/status` parse failure
+  - mark the affected alias telemetry stale
+  - retry on the next refresh cycle rather than acting on partial data
 - switch succeeds but resume fails
   - keep target alias active
   - persist `handoff_state=failed_resume`
@@ -331,6 +368,7 @@ Planned new commands:
 - `codex-switch daemon status`
 - `codex-switch auto status`
 - `codex-switch auto history`
+- `codex-switch auto source`
 - `codex-switch auto retry-resume`
 
 Deferred commands:
@@ -339,21 +377,22 @@ Deferred commands:
 - `codex-switch auto force-switch`
 - `codex-switch auto doctor`
 
-## Plugin/App Responsibilities
+## Deferred Companion Contingency
 
-The Codex companion should stay minimal. Its responsibilities are:
+V1 does not require a Codex plugin/app.
 
-- provide the daemon a reliable view of the current active thread
-- bridge Codex account rate-limit notifications
-- bridge thread token usage notifications
-- optionally expose user-visible status in a future iteration
+If direct daemon integration later proves insufficient for reliable active-thread identification or safe-checkpoint detection, a minimal companion may be introduced with these narrow responsibilities:
 
-The companion should not:
+- expose the active thread more reliably to the daemon
+- bridge live thread lifecycle state already visible inside Codex
+- avoid adding any business logic that duplicates daemon policy
+
+Even in that contingency design, the companion must not:
 
 - mutate auth state
 - choose target aliases
 - directly resume threads on its own policy
-- contain business logic that duplicates the daemon
+- become the source of truth for rate-limit history
 
 ## Service Model
 
@@ -376,7 +415,7 @@ This feature still manages sensitive auth snapshots. Existing safeguards remain 
 Testing should cover:
 
 - database schema creation and migrations
-- authoritative rate-limit snapshot ingestion
+- authoritative rate-limit snapshot ingestion from RPC and PTY fallback
 - token usage ingestion and append-only history
 - target alias ranking from mixed limit states
 - soft-threshold switching at safe checkpoints
@@ -386,12 +425,14 @@ Testing should cover:
 - stale telemetry disabling automation
 - preserving existing `codex-switch` mutation safety guarantees
 
-Integration tests should stub the Codex companion/app-server protocol rather than require a live Codex session.
+Integration tests should stub app-server JSON-RPC and PTY `/status` output rather than require a live Codex session.
 
 ## Open Risks
 
-- Codex app-server and plugin/app interfaces are experimental and may change.
+- Codex app-server interfaces are experimental and may change.
+- PTY `/status` parsing is a brittle fallback and should remain secondary to RPC.
 - Exact thread resumption depends on stable thread identifiers and compatible resume semantics across account changes.
 - Some account telemetry may be unavailable until a given alias has been observed at least once by the daemon.
+- If direct daemon integration cannot observe active-thread state reliably enough, a small companion may still be required in a follow-up iteration.
 
 These risks are acceptable for v1 because they are still materially safer and more reliable than browser automation or manually maintained quota configuration.
