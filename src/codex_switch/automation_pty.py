@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
 import re
 
 _CREDITS_RE = re.compile(r"^\s*Credits:\s*(?P<credits>\d+(?:\.\d+)?)\s*$", re.IGNORECASE)
 _PRIMARY_LIMIT_RE = re.compile(
-    r"^\s*5h limit:\s*(?P<used_percent>\d+)% used,\s*resets in\s+(?P<resets_after>\S+)\s*$",
+    r"^\s*5h limit:\s*(?P<used_percent>\d+)% used,\s*resets in\s+(?P<resets_after>.+?)\s*$",
     re.IGNORECASE,
 )
 _SECONDARY_LIMIT_RE = re.compile(
-    r"^\s*Weekly limit:\s*(?P<used_percent>\d+)% used,\s*resets in\s+(?P<resets_after>\S+)\s*$",
+    r"^\s*Weekly limit:\s*(?P<used_percent>\d+)% used,\s*resets in\s+(?P<resets_after>.+?)\s*$",
     re.IGNORECASE,
 )
 
@@ -19,7 +18,7 @@ _SECONDARY_LIMIT_RE = re.compile(
 class ParsedStatus:
     primary_used_percent: int | None
     secondary_used_percent: int | None
-    credits_balance: int | None
+    credits_balance: str | None
 
 
 def _parse_label_line(
@@ -64,6 +63,6 @@ def parse_status_output(text: str) -> ParsedStatus:
             "Credits:",
             text,
             "credits",
-            lambda value: int(Decimal(value)),
+            str,
         ),
     )

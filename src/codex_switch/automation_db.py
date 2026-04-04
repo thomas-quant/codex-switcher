@@ -29,7 +29,7 @@ class RateLimitRecord:
     secondary_window_duration_mins: int | None
     credits_has_credits: bool | None
     credits_unlimited: bool | None
-    credits_balance: int | None
+    credits_balance: str | None
     observed_at: str
 
 
@@ -220,7 +220,7 @@ class AutomationStore:
                 secondary_window_duration_mins INTEGER,
                 credits_has_credits INTEGER,
                 credits_unlimited INTEGER,
-                credits_balance INTEGER,
+                credits_balance TEXT,
                 observed_at TEXT NOT NULL,
                 PRIMARY KEY (alias, limit_id_key)
             );
@@ -289,6 +289,6 @@ def _row_to_rate_limit_record(row: sqlite3.Row) -> RateLimitRecord:
         secondary_window_duration_mins=row["secondary_window_duration_mins"],
         credits_has_credits=_int_to_bool(row["credits_has_credits"]),
         credits_unlimited=_int_to_bool(row["credits_unlimited"]),
-        credits_balance=row["credits_balance"],
+        credits_balance=None if row["credits_balance"] is None else str(row["credits_balance"]),
         observed_at=row["observed_at"],
     )

@@ -34,7 +34,7 @@ def test_store_creates_schema_and_records_rate_limit(tmp_path):
             ),
             credits_has_credits=True,
             credits_unlimited=False,
-            credits_balance=5,
+            credits_balance="5.25",
             observed_at="2026-04-04T00:00:00Z",
         )
     )
@@ -45,8 +45,17 @@ def test_store_creates_schema_and_records_rate_limit(tmp_path):
     assert rows[0].alias == "work"
     assert rows[0].limit_id is None
     assert rows[0].primary_used_percent == 42
+    assert rows[0].credits_balance == "5.25"
     assert oct(paths.switch_root.stat().st_mode & 0o777) == "0o700"
     assert oct(paths.automation_db_file.stat().st_mode & 0o777) == "0o600"
+
+    with sqlite3.connect(paths.automation_db_file) as conn:
+        column_types = {
+            row[1]: row[2]
+            for row in conn.execute("PRAGMA table_info(rate_limits)").fetchall()
+        }
+
+    assert column_types["credits_balance"] == "TEXT"
 
 
 def test_store_updates_rate_limit_in_place_for_same_key(tmp_path):
@@ -73,7 +82,7 @@ def test_store_updates_rate_limit_in_place_for_same_key(tmp_path):
             ),
             credits_has_credits=True,
             credits_unlimited=False,
-            credits_balance=5,
+            credits_balance="5.25",
             observed_at="2026-04-04T00:00:00Z",
         )
     )
@@ -96,7 +105,7 @@ def test_store_updates_rate_limit_in_place_for_same_key(tmp_path):
             ),
             credits_has_credits=False,
             credits_unlimited=True,
-            credits_balance=1,
+            credits_balance="1.00",
             observed_at="2026-04-04T01:00:00Z",
         )
     )
@@ -107,6 +116,7 @@ def test_store_updates_rate_limit_in_place_for_same_key(tmp_path):
     assert rows[0].observed_via == UsageSource.PTY
     assert rows[0].primary_used_percent == 42
     assert rows[0].secondary_used_percent == 7
+    assert rows[0].credits_balance == "1.00"
 
 
 def test_store_persists_handoff_state(tmp_path):

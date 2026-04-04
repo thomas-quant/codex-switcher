@@ -35,5 +35,5 @@ class RateLimitSnapshot:
     secondary_window: RateLimitWindow
     credits_has_credits: bool | None
     credits_unlimited: bool | None
-    credits_balance: int | None
+    credits_balance: str | None
     observed_at: str
