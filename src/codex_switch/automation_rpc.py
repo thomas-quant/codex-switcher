@@ -13,12 +13,14 @@ _SOURCE_UNAVAILABLE_MESSAGE = "Codex app-server RPC is unavailable"
 
 
 def build_rpc_request(request_id: int, method: str, params: Any) -> dict[str, Any]:
-    return {
+    request = {
         "jsonrpc": "2.0",
         "id": request_id,
         "method": method,
-        "params": params,
     }
+    if params is not None:
+        request["params"] = params
+    return request
 
 
 @dataclass(slots=True, frozen=True)
@@ -36,11 +38,12 @@ def parse_rate_limit_notification(notification: Mapping[str, Any]) -> ParsedRate
     if not isinstance(params, Mapping):
         raise ValueError("rate limit notification params must be a mapping")
 
-    primary = params.get("primary")
-    if not isinstance(primary, Mapping):
+    if "primary" in params:
+        primary = params["primary"]
+        if not isinstance(primary, Mapping):
+            raise ValueError("rate limit notification primary window must be a mapping")
+    else:
         primary = params
-    if not isinstance(primary, Mapping):
-        raise ValueError("rate limit notification primary window must be a mapping")
 
     return ParsedRateLimitNotification(
         primary_used_percent=primary.get("usedPercent"),

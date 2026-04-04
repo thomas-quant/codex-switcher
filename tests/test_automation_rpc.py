@@ -13,12 +13,26 @@ from codex_switch.automation_rpc import (
 from codex_switch.errors import AutomationSourceUnavailableError
 
 
-def test_build_rpc_request_includes_id_method_and_params():
+def test_build_rpc_request_omits_params_for_none():
     assert build_rpc_request(7, "account/rateLimits/read", None) == {
         "jsonrpc": "2.0",
         "id": 7,
         "method": "account/rateLimits/read",
-        "params": None,
+    }
+
+
+def test_build_rpc_request_includes_params_for_object_and_list():
+    assert build_rpc_request(8, "account/read", {"include": "limits"}) == {
+        "jsonrpc": "2.0",
+        "id": 8,
+        "method": "account/read",
+        "params": {"include": "limits"},
+    }
+    assert build_rpc_request(9, "account/readMany", ["a", "b"]) == {
+        "jsonrpc": "2.0",
+        "id": 9,
+        "method": "account/readMany",
+        "params": ["a", "b"],
     }
 
 
@@ -42,6 +56,21 @@ def test_parse_rate_limit_notification_extracts_primary_usage_fields():
         primary_used_percent=42,
         primary_resets_at="2026-04-04T00:00:00Z",
     )
+
+
+def test_parse_rate_limit_notification_raises_for_malformed_primary_envelope():
+    notification = {
+        "jsonrpc": "2.0",
+        "method": "account/rateLimits/updated",
+        "params": {
+            "primary": 42,
+            "usedPercent": 42,
+            "resetsAt": "2026-04-04T00:00:00Z",
+        },
+    }
+
+    with pytest.raises(ValueError, match="primary window"):
+        parse_rate_limit_notification(notification)
 
 
 def test_codex_rpc_client_launch_default_uses_app_server_command(monkeypatch):
