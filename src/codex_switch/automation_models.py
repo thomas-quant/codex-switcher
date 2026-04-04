@@ -37,3 +37,41 @@ class RateLimitSnapshot:
     credits_unlimited: bool | None
     credits_balance: str | None
     observed_at: str
+
+
+@dataclass(slots=True, frozen=True)
+class AccountIdentitySnapshot:
+    email: str | None
+    plan_type: str | None
+    fingerprint: str | None
+    observed_at: str
+
+
+@dataclass(slots=True, frozen=True)
+class ThreadRuntimeSnapshot:
+    thread_id: str
+    cwd: str | None
+    model: str | None
+    current_alias: str | None
+    last_turn_id: str | None
+    last_known_status: str | None
+    safe_to_switch: bool
+    last_total_tokens: int | None
+    last_seen_at: str
+
+
+@dataclass(slots=True, frozen=True)
+class ThreadTurnUsageSnapshot:
+    thread_id: str
+    turn_id: str
+    last_input_tokens: int | None
+    last_cached_input_tokens: int | None
+    last_output_tokens: int | None
+    last_reasoning_output_tokens: int | None
+    last_total_tokens: int | None
+    total_input_tokens: int | None
+    total_cached_input_tokens: int | None
+    total_output_tokens: int | None
+    total_reasoning_output_tokens: int | None
+    total_tokens: int | None
+    observed_at: str

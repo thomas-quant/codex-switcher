@@ -373,7 +373,7 @@ def test_main_dispatches_auto_commands(monkeypatch, capsys):
     assert capsys.readouterr().out.splitlines() == ["1 2026-04-05T01:00:00Z work->backup queued"]
 
     assert main(["auto", "retry-resume"]) == 0
-    assert capsys.readouterr().out.strip() == "retry thread: thread-123"
+    assert capsys.readouterr().out.strip() == "resumed thread: thread-123"
 
 
 def test_main_exits_via_parser_for_user_facing_errors(monkeypatch):

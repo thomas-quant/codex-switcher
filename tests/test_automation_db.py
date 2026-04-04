@@ -235,7 +235,7 @@ def test_initialize_migrates_rate_limit_credits_balance_to_text(tmp_path):
 
     assert column_types["credits_balance"] == "TEXT"
     assert stored_credit == ("7.50", "text")
-    assert schema_version == "2"
+    assert schema_version == "3"
 
 
 def test_store_persists_handoff_state(tmp_path):
@@ -412,3 +412,104 @@ def test_store_records_and_lists_switch_events(tmp_path):
     assert rows[0].result == "failed_resume"
     assert rows[1].result == "success"
     assert store.list_switch_events(limit=0) == []
+
+
+def test_store_reconciles_alias_inventory_and_updates_observation_metadata(tmp_path):
+    paths = resolve_paths(tmp_path)
+    store = AutomationStore(paths.automation_db_file)
+    store.initialize()
+
+    store.reconcile_aliases(["work", "backup"])
+    store.record_alias_observation(
+        alias="work",
+        account_email="work@example.com",
+        account_plan_type="pro",
+        account_fingerprint="fp-work",
+        observed_at="2026-04-05T00:00:00Z",
+    )
+    store.reconcile_aliases(["backup", "personal"])
+
+    rows = store.list_aliases()
+
+    assert [row.alias for row in rows] == ["backup", "personal"]
+    assert rows[0].account_email is None
+    assert rows[1].account_email is None
+
+
+def test_store_upserts_thread_runtime_rows(tmp_path):
+    paths = resolve_paths(tmp_path)
+    store = AutomationStore(paths.automation_db_file)
+    store.initialize()
+
+    store.upsert_thread_runtime(
+        thread_id="thread-1",
+        cwd="/repo",
+        model="gpt-5.4",
+        current_alias="work",
+        last_turn_id="turn-1",
+        last_known_status="running",
+        safe_to_switch=False,
+        last_total_tokens=100,
+        last_seen_at="2026-04-05T00:00:00Z",
+    )
+    store.upsert_thread_runtime(
+        thread_id="thread-1",
+        cwd="/repo",
+        model="gpt-5.4",
+        current_alias="work",
+        last_turn_id="turn-2",
+        last_known_status="idle",
+        safe_to_switch=True,
+        last_total_tokens=150,
+        last_seen_at="2026-04-05T00:01:00Z",
+    )
+
+    latest = store.get_thread_runtime("thread-1")
+
+    assert latest is not None
+    assert latest.last_turn_id == "turn-2"
+    assert latest.last_known_status == "idle"
+    assert latest.safe_to_switch is True
+    assert latest.last_total_tokens == 150
+
+
+def test_store_appends_thread_turn_usage_history(tmp_path):
+    paths = resolve_paths(tmp_path)
+    store = AutomationStore(paths.automation_db_file)
+    store.initialize()
+
+    store.append_thread_turn_usage(
+        thread_id="thread-1",
+        turn_id="turn-1",
+        last_input_tokens=10,
+        last_cached_input_tokens=2,
+        last_output_tokens=5,
+        last_reasoning_output_tokens=1,
+        last_total_tokens=18,
+        total_input_tokens=10,
+        total_cached_input_tokens=2,
+        total_output_tokens=5,
+        total_reasoning_output_tokens=1,
+        total_tokens=18,
+        observed_at="2026-04-05T00:00:00Z",
+    )
+    store.append_thread_turn_usage(
+        thread_id="thread-1",
+        turn_id="turn-2",
+        last_input_tokens=3,
+        last_cached_input_tokens=0,
+        last_output_tokens=8,
+        last_reasoning_output_tokens=2,
+        last_total_tokens=13,
+        total_input_tokens=13,
+        total_cached_input_tokens=2,
+        total_output_tokens=13,
+        total_reasoning_output_tokens=3,
+        total_tokens=31,
+        observed_at="2026-04-05T00:01:00Z",
+    )
+
+    rows = store.list_thread_turn_usage(thread_id="thread-1", limit=10)
+
+    assert [row.turn_id for row in rows] == ["turn-2", "turn-1"]
+    assert rows[0].total_tokens == 31

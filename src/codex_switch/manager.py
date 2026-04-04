@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import tempfile
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -29,6 +30,10 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def run_codex_resume(thread_id: str) -> None:
+    subprocess.run(["codex", "resume", thread_id], check=True)
+
+
 class CodexSwitchManager:
     def __init__(
         self,
@@ -40,6 +45,7 @@ class CodexSwitchManager:
         automation: AutomationStore | None = None,
         daemon_controller: DaemonController | None = None,
         soft_switch_threshold: float = 95.0,
+        resume_runner: Callable[[str], None] = run_codex_resume,
     ) -> None:
         self._paths = paths
         self._accounts = accounts
@@ -51,6 +57,7 @@ class CodexSwitchManager:
             daemon_controller if daemon_controller is not None else DaemonController(paths)
         )
         self._soft_switch_threshold = soft_switch_threshold
+        self._resume_runner = resume_runner
 
     def list_aliases(self) -> tuple[list[str], str | None]:
         current = self._state.load()
@@ -165,6 +172,27 @@ class CodexSwitchManager:
             raise AutomationHandoffError("No handoff state is available for resume retry")
         if handoff.phase != HandoffPhase.failed_resume:
             raise AutomationHandoffError("Resume retry is only valid for failed_resume handoff state")
+        self._automation.set_handoff_state(
+            thread_id=handoff.thread_id,
+            source_alias=handoff.source_alias,
+            target_alias=handoff.target_alias,
+            phase=HandoffPhase.pending_resume,
+            reason=handoff.reason,
+            updated_at=utc_now(),
+        )
+        try:
+            self._resume_runner(handoff.thread_id)
+        except Exception:
+            self._automation.set_handoff_state(
+                thread_id=handoff.thread_id,
+                source_alias=handoff.source_alias,
+                target_alias=handoff.target_alias,
+                phase=HandoffPhase.failed_resume,
+                reason=handoff.reason,
+                updated_at=utc_now(),
+            )
+            raise
+        self._automation.clear_handoff_state()
         return handoff.thread_id
 
     def _sync_active_snapshot_from_live_auth(self, state: AppState) -> None:

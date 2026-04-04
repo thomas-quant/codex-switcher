@@ -191,7 +191,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(*format_auto_history_lines(manager.auto_history(limit=args.limit)), sep="\n")
             elif args.auto_command == "retry-resume":
                 thread_id = manager.auto_retry_resume()
-                print(f"retry thread: {thread_id}")
+                print(f"resumed thread: {thread_id}")
             else:
                 parser.error(f"unknown auto command: {args.auto_command}")
         else:

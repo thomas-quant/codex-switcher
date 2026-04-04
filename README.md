@@ -66,7 +66,7 @@ Shows recent recorded switch events from the local automation database.
 
 ### `codex-switch auto retry-resume`
 
-Prints the recorded thread id when automation is in `failed_resume` handoff state so the same thread can be resumed manually.
+Attempts `codex resume <thread_id>` when automation is in `failed_resume` handoff state and clears the handoff record on success.
 
 ## Usage
 

@@ -65,6 +65,7 @@ def make_manager(tmp_path):
     state = StateStore(paths.state_file)
     automation = AutomationStore(paths.automation_db_file)
     daemon = DaemonSpy()
+    resume_calls: list[str] = []
     manager = CodexSwitchManager(
         paths=paths,
         accounts=accounts,
@@ -74,12 +75,13 @@ def make_manager(tmp_path):
         automation=automation,
         daemon_controller=daemon,
         soft_switch_threshold=95.0,
+        resume_runner=lambda thread_id: resume_calls.append(thread_id),
     )
-    return manager, paths, accounts, state, automation, daemon
+    return manager, paths, accounts, state, automation, daemon, resume_calls
 
 
 def test_daemon_start_initializes_store_and_starts_daemon(tmp_path):
-    manager, paths, _accounts, _state, _automation, daemon = make_manager(tmp_path)
+    manager, paths, _accounts, _state, _automation, daemon, _resume_calls = make_manager(tmp_path)
 
     status = manager.daemon_start()
 
@@ -89,7 +91,7 @@ def test_daemon_start_initializes_store_and_starts_daemon(tmp_path):
 
 
 def test_auto_status_returns_idle_when_no_active_alias(tmp_path):
-    manager, _paths, _accounts, _state, _automation, _daemon = make_manager(tmp_path)
+    manager, _paths, _accounts, _state, _automation, _daemon, _resume_calls = make_manager(tmp_path)
 
     status = manager.auto_status()
 
@@ -99,7 +101,7 @@ def test_auto_status_returns_idle_when_no_active_alias(tmp_path):
 
 
 def test_auto_status_suggests_target_alias_after_soft_trigger(tmp_path):
-    manager, _paths, accounts, state, automation, _daemon = make_manager(tmp_path)
+    manager, _paths, accounts, state, automation, _daemon, _resume_calls = make_manager(tmp_path)
     accounts.write_snapshot_from_bytes("work", b"{}")
     accounts.write_snapshot_from_bytes("backup-a", b"{}")
     accounts.write_snapshot_from_bytes("backup-b", b"{}")
@@ -119,7 +121,7 @@ def test_auto_status_suggests_target_alias_after_soft_trigger(tmp_path):
 
 
 def test_auto_source_lists_aliases_with_or_without_telemetry(tmp_path):
-    manager, _paths, accounts, _state, automation, _daemon = make_manager(tmp_path)
+    manager, _paths, accounts, _state, automation, _daemon, _resume_calls = make_manager(tmp_path)
     accounts.write_snapshot_from_bytes("with-telemetry", b"{}")
     accounts.write_snapshot_from_bytes("without-telemetry", b"{}")
     automation.upsert_rate_limit(make_snapshot("with-telemetry", 10, 5))
@@ -133,7 +135,7 @@ def test_auto_source_lists_aliases_with_or_without_telemetry(tmp_path):
 
 
 def test_auto_history_returns_latest_events(tmp_path):
-    manager, _paths, _accounts, _state, automation, _daemon = make_manager(tmp_path)
+    manager, _paths, _accounts, _state, automation, _daemon, _resume_calls = make_manager(tmp_path)
     automation.append_switch_event(
         thread_id="t1",
         from_alias="work",
@@ -168,8 +170,8 @@ def test_auto_history_returns_latest_events(tmp_path):
     assert rows[0].result == "failed_resume"
 
 
-def test_auto_retry_resume_returns_thread_id_for_failed_resume_state(tmp_path):
-    manager, _paths, _accounts, _state, automation, _daemon = make_manager(tmp_path)
+def test_auto_retry_resume_runs_resume_and_clears_failed_resume_state(tmp_path):
+    manager, _paths, _accounts, _state, automation, _daemon, resume_calls = make_manager(tmp_path)
     automation.set_handoff_state(
         thread_id="thread-42",
         source_alias="work",
@@ -180,10 +182,12 @@ def test_auto_retry_resume_returns_thread_id_for_failed_resume_state(tmp_path):
     )
 
     assert manager.auto_retry_resume() == "thread-42"
+    assert resume_calls == ["thread-42"]
+    assert automation.get_handoff_state() is None
 
 
 def test_auto_retry_resume_rejects_non_failed_resume_state(tmp_path):
-    manager, _paths, _accounts, _state, automation, _daemon = make_manager(tmp_path)
+    manager, _paths, _accounts, _state, automation, _daemon, _resume_calls = make_manager(tmp_path)
     automation.set_handoff_state(
         thread_id="thread-42",
         source_alias="work",
