@@ -25,8 +25,8 @@ def build_rpc_request(request_id: int, method: str, params: Any) -> dict[str, An
 
 @dataclass(slots=True, frozen=True)
 class ParsedRateLimitNotification:
-    primary_used_percent: float | None
-    primary_resets_at: str | None
+    primary_used_percent: int
+    primary_resets_at: int | None
 
 
 def parse_rate_limit_notification(notification: Mapping[str, Any]) -> ParsedRateLimitNotification:
@@ -38,16 +38,30 @@ def parse_rate_limit_notification(notification: Mapping[str, Any]) -> ParsedRate
     if not isinstance(params, Mapping):
         raise ValueError("rate limit notification params must be a mapping")
 
-    if "primary" in params:
-        primary = params["primary"]
+    rate_limits = params.get("rateLimits")
+    if not isinstance(rate_limits, Mapping):
+        raise ValueError("rate limit notification rateLimits must be a mapping")
+
+    if "primary" in rate_limits:
+        primary = rate_limits["primary"]
         if not isinstance(primary, Mapping):
             raise ValueError("rate limit notification primary window must be a mapping")
     else:
-        primary = params
+        primary = rate_limits
+
+    if "usedPercent" not in primary:
+        raise ValueError("rate limit notification usedPercent is required")
+    used_percent = primary["usedPercent"]
+    if not isinstance(used_percent, int) or isinstance(used_percent, bool):
+        raise ValueError("rate limit notification usedPercent must be an int")
+
+    resets_at = primary.get("resetsAt")
+    if (not isinstance(resets_at, int) or isinstance(resets_at, bool)) and resets_at is not None:
+        raise ValueError("rate limit notification resetsAt must be an int or None")
 
     return ParsedRateLimitNotification(
-        primary_used_percent=primary.get("usedPercent"),
-        primary_resets_at=primary.get("resetsAt"),
+        primary_used_percent=used_percent,
+        primary_resets_at=resets_at,
     )
 
 
