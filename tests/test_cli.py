@@ -10,6 +10,7 @@ from codex_switch.cli import format_daemon_status_lines
 from codex_switch.cli import format_status_lines
 from codex_switch.cli import main
 from codex_switch.errors import CodexSwitchError
+from codex_switch.manager import LoginMode
 from codex_switch.models import AutoSourceResult, AutoStatusResult, DaemonStatusResult, StatusResult
 
 
@@ -34,6 +35,16 @@ def test_build_parser_add_includes_alias_argument():
 
     assert namespace.command == "add"
     assert namespace.alias == "work"
+
+
+def test_build_parser_add_accepts_device_auth_flag():
+    parser = build_parser()
+
+    namespace = parser.parse_args(["add", "work", "--device-auth"])
+
+    assert namespace.command == "add"
+    assert namespace.alias == "work"
+    assert namespace.device_auth is True
 
 
 @pytest.mark.parametrize("command", ["add", "use", "remove"])
@@ -199,6 +210,23 @@ def test_main_dispatches_add(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert result == 0
     assert calls == [("add", "work")]
+    assert captured.out == "added alias: work\n"
+
+
+def test_main_dispatches_add_device_auth(monkeypatch, capsys):
+    calls: list[tuple[str, str, LoginMode]] = []
+
+    class FakeManager:
+        def add(self, alias: str, login_mode: LoginMode = LoginMode.BROWSER) -> None:
+            calls.append(("add", alias, login_mode))
+
+    monkeypatch.setattr("codex_switch.cli.build_default_manager", lambda: FakeManager())
+
+    result = main(["add", "work", "--device-auth"])
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert calls == [("add", "work", LoginMode.DEVICE_AUTH)]
     assert captured.out == "added alias: work\n"
 
 
