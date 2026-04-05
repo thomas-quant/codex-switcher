@@ -106,11 +106,11 @@ class AppServerRpcSource:
             self._initialized = True
 
         observed_at = _utc_now()
-        account_response = client.send_request(self._allocate_request_id(), "account/read", None)
+        account_response = client.send_request(self._allocate_request_id(), "account/read", {})
         rate_limit_response = client.send_request(
             self._allocate_request_id(),
             "account/rateLimits/read",
-            None,
+            {},
         )
         thread_runtime: ThreadRuntimeSnapshot | None = None
         token_usage: list[ThreadTurnUsageSnapshot] = []

@@ -111,55 +111,54 @@ def parse_rate_limits_result(
     observed_at: str,
 ) -> list[RateLimitSnapshot]:
     result = _mapping_field(response, "result", context="account/rateLimits/read response")
-    plan_type = _optional_str(result.get("planType"), context="rateLimits planType")
-    credits = result.get("credits")
-    if credits is None:
-        credits_mapping: Mapping[str, Any] | None = None
-    elif isinstance(credits, Mapping):
-        credits_mapping = credits
-    else:
-        raise ValueError("account/rateLimits/read credits must be a mapping or null")
-
-    credits_has_credits = _optional_bool(
-        None if credits_mapping is None else credits_mapping.get("hasCredits"),
-        context="rateLimits credits.hasCredits",
-    )
-    credits_unlimited = _optional_bool(
-        None if credits_mapping is None else credits_mapping.get("unlimited"),
-        context="rateLimits credits.unlimited",
-    )
-    credits_balance = _optional_decimal_string(
-        None if credits_mapping is None else credits_mapping.get("balance"),
-        context="rateLimits credits.balance",
-    )
+    result_plan_type = _optional_str(result.get("planType"), context="rateLimits planType")
+    result_credits = _optional_mapping(result.get("credits"), context="rateLimits credits")
 
     raw_rate_limits = result.get("rateLimits")
     if isinstance(raw_rate_limits, list):
         items = raw_rate_limits
     elif isinstance(raw_rate_limits, Mapping) and isinstance(raw_rate_limits.get("items"), list):
         items = raw_rate_limits["items"]
+    elif isinstance(raw_rate_limits, Mapping):
+        items = [raw_rate_limits]
     else:
-        raise ValueError("account/rateLimits/read rateLimits must be a list")
+        raise ValueError("account/rateLimits/read rateLimits must be a list or mapping")
 
     snapshots: list[RateLimitSnapshot] = []
     for raw_item in items:
         if not isinstance(raw_item, Mapping):
             raise ValueError("account/rateLimits/read rate limit item must be a mapping")
+        item_plan_type = _optional_str(raw_item.get("planType"), context="rateLimits item planType")
+        credits_mapping = _optional_mapping(raw_item.get("credits"), context="rateLimits item credits")
+        if credits_mapping is None:
+            credits_mapping = result_credits
         snapshots.append(
             RateLimitSnapshot(
                 alias=alias,
-                limit_id=_optional_str(raw_item.get("id"), context="rateLimits id"),
-                limit_name=_required_str(raw_item.get("name"), context="rateLimits name"),
+                limit_id=_optional_str(
+                    raw_item.get("id", raw_item.get("limitId")),
+                    context="rateLimits id",
+                ),
+                limit_name=_limit_name(raw_item),
                 observed_via=observed_via,
-                plan_type=plan_type,
+                plan_type=result_plan_type if result_plan_type is not None else item_plan_type,
                 primary_window=_parse_rate_limit_window(raw_item.get("primary"), context="rateLimits primary"),
                 secondary_window=_parse_rate_limit_window(
                     raw_item.get("secondary"),
                     context="rateLimits secondary",
                 ),
-                credits_has_credits=credits_has_credits,
-                credits_unlimited=credits_unlimited,
-                credits_balance=credits_balance,
+                credits_has_credits=_optional_bool(
+                    None if credits_mapping is None else credits_mapping.get("hasCredits"),
+                    context="rateLimits credits.hasCredits",
+                ),
+                credits_unlimited=_optional_bool(
+                    None if credits_mapping is None else credits_mapping.get("unlimited"),
+                    context="rateLimits credits.unlimited",
+                ),
+                credits_balance=_optional_decimal_string(
+                    None if credits_mapping is None else credits_mapping.get("balance"),
+                    context="rateLimits credits.balance",
+                ),
                 observed_at=observed_at,
             )
         )
@@ -338,6 +337,24 @@ def _mapping_field(value: Mapping[str, Any], key: str, *, context: str) -> Mappi
     if not isinstance(field, Mapping):
         raise ValueError(f"{context} {key} must be a mapping")
     return field
+
+
+def _optional_mapping(value: Any, *, context: str) -> Mapping[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{context} must be a mapping or null")
+    return value
+
+
+def _limit_name(rate_limit: Mapping[str, Any]) -> str:
+    limit_name = rate_limit.get("name", rate_limit.get("limitName"))
+    if isinstance(limit_name, str) and limit_name != "":
+        return limit_name
+    limit_id = rate_limit.get("id", rate_limit.get("limitId"))
+    if isinstance(limit_id, str) and limit_id != "":
+        return limit_id
+    return "rate limit"
 
 
 def _required_str(value: Any, *, context: str) -> str:

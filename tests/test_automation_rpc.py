@@ -240,6 +240,86 @@ def test_parse_rate_limits_result_extracts_full_snapshot_list():
     ]
 
 
+def test_parse_rate_limits_result_accepts_singleton_mapping_shape():
+    response = {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {
+            "rateLimits": {
+                "limitId": "codex",
+                "limitName": None,
+                "primary": {
+                    "usedPercent": 97,
+                    "resetsAt": 1_775_372_244,
+                    "windowDurationMins": 300,
+                },
+                "secondary": {
+                    "usedPercent": 54,
+                    "resetsAt": 1_775_834_532,
+                    "windowDurationMins": 10080,
+                },
+                "credits": {
+                    "hasCredits": False,
+                    "unlimited": False,
+                    "balance": None,
+                },
+                "planType": "team",
+            },
+            "rateLimitsByLimitId": {
+                "codex": {
+                    "limitId": "codex",
+                    "limitName": None,
+                    "primary": {
+                        "usedPercent": 97,
+                        "resetsAt": 1_775_372_244,
+                        "windowDurationMins": 300,
+                    },
+                    "secondary": {
+                        "usedPercent": 54,
+                        "resetsAt": 1_775_834_532,
+                        "windowDurationMins": 10080,
+                    },
+                    "credits": {
+                        "hasCredits": False,
+                        "unlimited": False,
+                        "balance": None,
+                    },
+                    "planType": "team",
+                }
+            },
+        },
+    }
+
+    assert parse_rate_limits_result(
+        alias="work",
+        response=response,
+        observed_via=UsageSource.RPC,
+        observed_at="2026-04-05T00:00:00Z",
+    ) == [
+        RateLimitSnapshot(
+            alias="work",
+            limit_id="codex",
+            limit_name="codex",
+            observed_via=UsageSource.RPC,
+            plan_type="team",
+            primary_window=RateLimitWindow(
+                used_percent=97,
+                resets_at="2026-04-05T06:57:24Z",
+                window_duration_mins=300,
+            ),
+            secondary_window=RateLimitWindow(
+                used_percent=54,
+                resets_at="2026-04-10T15:22:12Z",
+                window_duration_mins=10080,
+            ),
+            credits_has_credits=False,
+            credits_unlimited=False,
+            credits_balance=None,
+            observed_at="2026-04-05T00:00:00Z",
+        )
+    ]
+
+
 def test_parse_thread_runtime_notification_extracts_safe_checkpoint_state():
     notification = {
         "jsonrpc": "2.0",

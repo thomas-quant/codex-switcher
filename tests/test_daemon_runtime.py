@@ -464,9 +464,11 @@ def test_app_server_rpc_source_polls_requests_and_notifications():
                             "jsonrpc": "2.0",
                             "id": request_id,
                             "result": {
-                                "email": "work@example.com",
-                                "planType": "pro",
-                                "fingerprint": "fp-work",
+                                "account": {
+                                    "email": "work@example.com",
+                                    "planType": "pro",
+                                    "fingerprint": "fp-work",
+                                }
                             },
                         }
                     },
@@ -480,28 +482,26 @@ def test_app_server_rpc_source_polls_requests_and_notifications():
                             "jsonrpc": "2.0",
                             "id": request_id,
                             "result": {
-                                "planType": "pro",
-                                "credits": {
-                                    "hasCredits": True,
-                                    "unlimited": False,
-                                    "balance": "5.25",
+                                "rateLimits": {
+                                    "limitId": "codex",
+                                    "limitName": None,
+                                    "primary": {
+                                        "usedPercent": 20,
+                                        "resetsAt": 1_744_147_200,
+                                        "windowDurationMins": 300,
+                                    },
+                                    "secondary": {
+                                        "usedPercent": 10,
+                                        "resetsAt": 1_744_752_000,
+                                        "windowDurationMins": 10080,
+                                    },
+                                    "credits": {
+                                        "hasCredits": True,
+                                        "unlimited": False,
+                                        "balance": "5.25",
+                                    },
+                                    "planType": "pro",
                                 },
-                                "rateLimits": [
-                                    {
-                                        "id": "five-hour",
-                                        "name": "5h limit",
-                                        "primary": {
-                                            "usedPercent": 20,
-                                            "resetsAt": 1_744_147_200,
-                                            "windowDurationMins": 300,
-                                        },
-                                        "secondary": {
-                                            "usedPercent": 10,
-                                            "resetsAt": 1_744_752_000,
-                                            "windowDurationMins": 10080,
-                                        },
-                                    }
-                                ],
                             },
                         }
                     },
@@ -563,9 +563,16 @@ def test_app_server_rpc_source_polls_requests_and_notifications():
 
     result = source.poll(active_alias="work")
 
+    assert source._client.requests == [
+        (1, "initialize", {"clientInfo": {"name": "codex-switchd", "version": "0.1.0"}}),
+        (2, "account/read", {}),
+        (3, "account/rateLimits/read", {}),
+    ]
     assert result.account_identity is not None
     assert result.account_identity.email == "work@example.com"
     assert result.rate_limits[0].alias == "work"
+    assert result.rate_limits[0].limit_id == "codex"
+    assert result.rate_limits[0].limit_name == "codex"
     assert result.thread_runtime is not None
     assert result.thread_runtime.thread_id == "thread-1"
     assert result.hard_limit_exceeded is True
