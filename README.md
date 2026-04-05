@@ -30,7 +30,7 @@ Captures a fresh `codex login` session into a named snapshot. The existing activ
 
 ### `codex-switch list`
 
-Lists configured aliases. The active alias is marked with `*`. When the local telemetry cache knows the account plan type, `list` renders `alias -- type`; otherwise it prints the alias name only. Missing plan types are refreshed best-effort during `list` when telemetry probing is available.
+Lists configured aliases. The active alias is marked with `*`. When the local telemetry cache knows the account plan type, `list` renders `alias -- type`; otherwise it prints the alias name only. Missing plan types are refreshed best-effort during `list` when telemetry probing is available, and successful refreshes are written back to the local telemetry cache.
 
 ### `codex-switch use <alias>`
 

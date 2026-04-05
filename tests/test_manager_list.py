@@ -82,6 +82,33 @@ def test_list_aliases_does_not_create_automation_db_for_cold_cache(tmp_path):
     assert not store._db_file.exists()
 
 
+def test_list_aliases_persists_probe_results_for_cold_cache(tmp_path):
+    def alias_metadata_probe(alias: str) -> AliasTelemetryObservation | None:
+        return AliasTelemetryObservation(
+            account_email=f"{alias}@example.com",
+            account_plan_type="plus",
+            account_fingerprint=f"fp-{alias}",
+            observed_at="2026-04-05T00:10:00Z",
+        )
+
+    manager, _paths, accounts, state, store, _guard = make_manager(
+        tmp_path,
+        alias_metadata_probe=alias_metadata_probe,
+        initialize_automation=False,
+    )
+    accounts.write_snapshot_from_bytes("beta", b"{}")
+    state.save(AppState(active_alias="beta", updated_at="2026-04-05T00:00:00Z"))
+
+    assert not store._db_file.exists()
+
+    entries, active_alias = manager.list_aliases()
+
+    assert entries == [AliasListEntry(alias="beta", plan_type="plus")]
+    assert active_alias == "beta"
+    assert store._db_file.exists()
+    assert store.list_aliases()[0].account_plan_type == "plus"
+
+
 def test_list_aliases_falls_back_when_automation_db_is_unavailable(tmp_path):
     manager, _paths, accounts, state, store, _guard = make_manager(tmp_path)
     accounts.write_snapshot_from_bytes("backup", b"{}")
