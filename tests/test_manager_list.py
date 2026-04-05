@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from codex_switch.accounts import AccountStore
 from codex_switch.automation_db import AutomationStore
 from codex_switch.manager import CodexSwitchManager
@@ -165,6 +167,68 @@ def test_list_aliases_refreshes_missing_plan_type_for_inactive_alias_and_restore
     assert guard.calls == 1
     assert paths.live_auth_file.read_bytes() == b'{"token":"live-work"}'
     assert state.load() == AppState(active_alias="work", updated_at="2026-04-05T00:00:00Z")
+
+
+def test_list_aliases_preserves_dirty_active_snapshot_during_inactive_refresh(tmp_path):
+    def alias_metadata_probe(alias: str) -> AliasTelemetryObservation | None:
+        if alias != "backup":
+            return None
+        return AliasTelemetryObservation(
+            account_email="backup@example.com",
+            account_plan_type="pro",
+            account_fingerprint="fp-backup",
+            observed_at="2026-04-05T00:15:00Z",
+        )
+
+    manager, paths, accounts, state, store, _guard = make_manager(
+        tmp_path,
+        alias_metadata_probe=alias_metadata_probe,
+    )
+    accounts.write_snapshot_from_bytes("work", b'{"token":"snapshot-work"}')
+    accounts.write_snapshot_from_bytes("backup", b'{"token":"snapshot-backup"}')
+    store.reconcile_aliases(["backup", "work"])
+    state.save(AppState(active_alias="work", updated_at="2026-04-05T00:00:00Z"))
+    paths.live_auth_file.parent.mkdir(parents=True, exist_ok=True)
+    paths.live_auth_file.write_bytes(b'{"token":"live-work"}')
+
+    manager.list_aliases()
+
+    assert accounts.read_snapshot("work") == b'{"token":"snapshot-work"}'
+    assert paths.live_auth_file.read_bytes() == b'{"token":"live-work"}'
+
+
+def test_list_aliases_raises_when_inactive_probe_cleanup_fails(tmp_path, monkeypatch):
+    def alias_metadata_probe(alias: str) -> AliasTelemetryObservation | None:
+        if alias != "backup":
+            return None
+        return AliasTelemetryObservation(
+            account_email="backup@example.com",
+            account_plan_type="pro",
+            account_fingerprint="fp-backup",
+            observed_at="2026-04-05T00:15:00Z",
+        )
+
+    manager, paths, accounts, state, store, _guard = make_manager(
+        tmp_path,
+        alias_metadata_probe=alias_metadata_probe,
+    )
+    accounts.write_snapshot_from_bytes("work", b'{"token":"snapshot-work"}')
+    accounts.write_snapshot_from_bytes("backup", b'{"token":"snapshot-backup"}')
+    store.reconcile_aliases(["backup", "work"])
+    state.save(AppState(active_alias="work", updated_at="2026-04-05T00:00:00Z"))
+    paths.live_auth_file.parent.mkdir(parents=True, exist_ok=True)
+    paths.live_auth_file.write_bytes(b'{"token":"live-work"}')
+
+    monkeypatch.setattr(
+        manager,
+        "_restore_previous_live_auth",
+        lambda _previous_state, _backup_path, _clear_unmanaged_live_auth, prefer_live_backup=False: (
+            (_ for _ in ()).throw(RuntimeError("restore failed"))
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="restore failed"):
+        manager.list_aliases()
 
 
 def test_list_aliases_skips_inactive_refresh_when_mutation_is_unsafe(tmp_path):

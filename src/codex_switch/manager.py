@@ -169,8 +169,9 @@ class CodexSwitchManager:
 
         backup_path: Path | None = None
         clear_unmanaged_live_auth = False
+        observation: AliasTelemetryObservation | None = None
+        probe_error: Exception | None = None
         try:
-            self._sync_active_snapshot_from_live_auth(previous_state)
             backup_path = self._backup_live_auth()
             clear_unmanaged_live_auth = True
             atomic_write_bytes(
@@ -179,22 +180,33 @@ class CodexSwitchManager:
                 mode=0o600,
                 root=self._paths.codex_root,
             )
-            return self._alias_metadata_probe(alias)
-        except Exception:
+            observation = self._alias_metadata_probe(alias)
+        except Exception as exc:
+            probe_error = exc
+
+        cleanup_errors: list[Exception] = []
+        try:
+            self._restore_previous_live_auth(
+                previous_state,
+                backup_path,
+                clear_unmanaged_live_auth,
+                prefer_live_backup=True,
+            )
+        except Exception as exc:
+            cleanup_errors.append(exc)
+        try:
+            self._state.save(previous_state)
+        except Exception as exc:
+            cleanup_errors.append(exc)
+
+        if len(cleanup_errors) == 1:
+            raise cleanup_errors[0]
+        if cleanup_errors:
+            raise ExceptionGroup("Multiple cleanup failures", cleanup_errors)
+
+        if probe_error is not None:
             return None
-        finally:
-            try:
-                self._restore_previous_live_auth(
-                    previous_state,
-                    backup_path,
-                    clear_unmanaged_live_auth,
-                )
-            except Exception:
-                pass
-            try:
-                self._state.save(previous_state)
-            except Exception:
-                pass
+        return observation
 
     def status(self) -> StatusResult:
         current = self._state.load()
@@ -369,7 +381,24 @@ class CodexSwitchManager:
         previous_state: AppState,
         backup_path: Path | None,
         clear_unmanaged_live_auth: bool,
+        *,
+        prefer_live_backup: bool = False,
     ) -> None:
+        if prefer_live_backup:
+            if backup_path is not None and backup_path.exists():
+                atomic_write_bytes(
+                    self._paths.live_auth_file,
+                    backup_path.read_bytes(),
+                    mode=0o600,
+                    root=self._paths.codex_root,
+                )
+                backup_path.unlink(missing_ok=True)
+                return
+
+            if clear_unmanaged_live_auth and self._paths.live_auth_file.exists():
+                self._paths.live_auth_file.unlink()
+            return
+
         if (
             previous_state.active_alias is not None
             and self._accounts.exists(previous_state.active_alias)

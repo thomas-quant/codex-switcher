@@ -57,10 +57,10 @@ def build_default_manager() -> CodexSwitchManager:
     paths = resolve_paths()
     accounts = AccountStore(paths.accounts_dir)
     state = StateStore(paths.state_file)
-    rpc_source = AppServerRpcSource()
     pty_source = CodexCliPtySource()
 
     def probe_alias_metadata(alias: str):
+        rpc_source = AppServerRpcSource()
         try:
             poll = rpc_source.poll(active_alias=alias)
         except AutomationSourceUnavailableError:
