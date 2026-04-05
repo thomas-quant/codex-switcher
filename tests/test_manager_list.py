@@ -82,9 +82,11 @@ def test_list_aliases_falls_back_when_automation_db_is_unavailable(tmp_path):
     accounts.write_snapshot_from_bytes("beta", b"{}")
     state.save(AppState(active_alias="beta", updated_at="2026-04-05T00:00:00Z"))
 
+    target = tmp_path / "automation-target.sqlite"
+    target.write_bytes(b"")
     db_file = store._db_file
     db_file.unlink()
-    db_file.symlink_to(tmp_path / "automation-target.sqlite")
+    db_file.symlink_to(target)
 
     entries, active_alias = manager.list_aliases()
 
