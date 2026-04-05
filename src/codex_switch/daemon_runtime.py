@@ -246,7 +246,8 @@ class DaemonRuntime:
 
     def run_once(self) -> None:
         self._initialize_once()
-        aliases, active_alias = self._manager.list_aliases()
+        alias_entries, active_alias = self._manager.list_aliases()
+        aliases = [entry.alias for entry in alias_entries]
         self._store.reconcile_aliases(aliases)
 
         pending = self._store.get_handoff_state()
@@ -557,7 +558,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         accounts=accounts,
         state=state,
         ensure_safe_to_mutate=ensure_codex_not_running,
-        login_runner=lambda: None,
+        login_runner=lambda _mode: None,
         automation=store,
     )
     runtime = DaemonRuntime(

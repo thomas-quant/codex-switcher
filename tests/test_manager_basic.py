@@ -5,7 +5,7 @@ import pytest
 from codex_switch.accounts import AccountStore
 from codex_switch.errors import ActiveAliasRemovalError, SnapshotNotFoundError
 from codex_switch.manager import CodexSwitchManager
-from codex_switch.models import AppState, StatusResult
+from codex_switch.models import AliasListEntry, AppState, StatusResult
 from codex_switch.paths import resolve_paths
 from codex_switch.state import StateStore
 
@@ -28,7 +28,7 @@ def make_manager(tmp_path):
         accounts=accounts,
         state=state,
         ensure_safe_to_mutate=guard,
-        login_runner=lambda: None,
+        login_runner=lambda _mode: None,
     )
     return manager, paths, accounts, state, guard
 
@@ -101,5 +101,8 @@ def test_list_aliases_returns_sorted_names_and_active_alias(tmp_path):
 
     aliases, active_alias = manager.list_aliases()
 
-    assert aliases == ["alpha", "zeta"]
+    assert aliases == [
+        AliasListEntry(alias="alpha", plan_type=None),
+        AliasListEntry(alias="zeta", plan_type=None),
+    ]
     assert active_alias == "zeta"

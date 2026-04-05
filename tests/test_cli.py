@@ -1,7 +1,9 @@
-import pytest
 from types import SimpleNamespace
 
+import pytest
+
 from codex_switch.automation_db import SwitchEventRecord
+from codex_switch.cli import build_default_manager
 from codex_switch.cli import build_parser
 from codex_switch.cli import format_alias_lines
 from codex_switch.cli import format_auto_history_lines
@@ -11,7 +13,14 @@ from codex_switch.cli import format_daemon_status_lines
 from codex_switch.cli import format_status_lines
 from codex_switch.cli import main
 from codex_switch.errors import CodexSwitchError
-from codex_switch.models import AutoSourceResult, AutoStatusResult, DaemonStatusResult, LoginMode, StatusResult
+from codex_switch.models import (
+    AliasListEntry,
+    AutoSourceResult,
+    AutoStatusResult,
+    DaemonStatusResult,
+    LoginMode,
+    StatusResult,
+)
 
 
 def test_build_parser_registers_expected_subcommands():
@@ -48,7 +57,7 @@ def test_build_parser_add_accepts_device_auth_flag():
 
 
 def test_build_default_manager_threads_login_mode_through_runner(monkeypatch):
-    captured = {}
+    captured: dict[str, object] = {}
 
     class FakeManager:
         def __init__(self, **kwargs):
@@ -64,15 +73,67 @@ def test_build_default_manager_threads_login_mode_through_runner(monkeypatch):
     monkeypatch.setattr("codex_switch.process_guard.ensure_codex_not_running", lambda: None)
     monkeypatch.setattr(
         "codex_switch.codex_login.run_codex_login",
-        lambda login_mode: captured.setdefault("login_mode", login_mode),
+        lambda login_mode=LoginMode.BROWSER: captured.setdefault("login_mode", login_mode),
     )
-
-    from codex_switch.cli import build_default_manager
 
     build_default_manager()
 
-    captured["login_runner"](LoginMode.DEVICE_AUTH)
+    login_runner = captured["login_runner"]
+    assert callable(login_runner)
+    login_runner(LoginMode.DEVICE_AUTH)
     assert captured["login_mode"] == LoginMode.DEVICE_AUTH
+    assert callable(captured["alias_metadata_probe"])
+
+
+def test_build_default_manager_uses_fresh_rpc_source_per_alias_probe(monkeypatch):
+    captured: dict[str, object] = {}
+    rpc_instances: list[int] = []
+
+    class FakeManager:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    class FakeRpcSource:
+        def __init__(self):
+            rpc_instances.append(len(rpc_instances) + 1)
+            self.instance_id = rpc_instances[-1]
+
+        def poll(self, *, active_alias: str):
+            return SimpleNamespace(
+                account_identity=SimpleNamespace(
+                    email=f"{active_alias}@example.com",
+                    plan_type=f"plan-{self.instance_id}",
+                    fingerprint=f"fp-{self.instance_id}",
+                    observed_at=f"2026-04-05T00:0{self.instance_id}:00Z",
+                ),
+                rate_limits=[],
+            )
+
+    class FakePtySource:
+        def probe(self, *, alias: str, observed_at: str):
+            raise AssertionError("PTY fallback should not be used")
+
+    monkeypatch.setattr("codex_switch.cli.CodexSwitchManager", FakeManager)
+    monkeypatch.setattr(
+        "codex_switch.cli.resolve_paths",
+        lambda: SimpleNamespace(accounts_dir=object(), state_file=object()),
+    )
+    monkeypatch.setattr("codex_switch.cli.AccountStore", lambda _path: object())
+    monkeypatch.setattr("codex_switch.cli.StateStore", lambda _path: object())
+    monkeypatch.setattr("codex_switch.process_guard.ensure_codex_not_running", lambda: None)
+    monkeypatch.setattr("codex_switch.codex_login.run_codex_login", lambda _login_mode=LoginMode.BROWSER: None)
+    monkeypatch.setattr("codex_switch.daemon_runtime.AppServerRpcSource", FakeRpcSource)
+    monkeypatch.setattr("codex_switch.daemon_runtime.CodexCliPtySource", FakePtySource)
+
+    build_default_manager()
+
+    probe = captured["alias_metadata_probe"]
+    first = probe("alpha")
+    second = probe("beta")
+
+    assert rpc_instances == [1, 2]
+    assert first.account_plan_type == "plan-1"
+    assert second.account_plan_type == "plan-2"
 
 
 @pytest.mark.parametrize("command", ["add", "use", "remove"])
@@ -110,7 +171,13 @@ def test_build_parser_auto_history_accepts_limit():
 
 
 def test_format_alias_lines_marks_active_alias():
-    assert format_alias_lines(["personal", "work"], "work") == [
+    assert format_alias_lines(
+        [
+            AliasListEntry(alias="personal", plan_type=None),
+            AliasListEntry(alias="work", plan_type=None),
+        ],
+        "work",
+    ) == [
         "  personal",
         "* work",
     ]
@@ -118,6 +185,26 @@ def test_format_alias_lines_marks_active_alias():
 
 def test_format_alias_lines_handles_empty_alias_list():
     assert format_alias_lines([], None) == ["No aliases configured."]
+
+
+def test_format_alias_lines_appends_plan_types_when_known():
+    assert format_alias_lines(
+        [
+            AliasListEntry(alias="backup", plan_type=None),
+            AliasListEntry(alias="beta", plan_type="plus"),
+        ],
+        "beta",
+    ) == [
+        "  backup",
+        "* beta -- plus",
+    ]
+
+
+def test_format_alias_lines_omits_blank_plan_types():
+    assert format_alias_lines(
+        [AliasListEntry(alias="beta", plan_type="")],
+        "beta",
+    ) == ["* beta"]
 
 
 def test_format_status_lines_marks_dirty_state():
@@ -277,8 +364,11 @@ def test_main_dispatches_use(monkeypatch, capsys):
 
 def test_main_dispatches_list(monkeypatch, capsys):
     class FakeManager:
-        def list_aliases(self) -> tuple[list[str], str | None]:
-            return ["personal", "work"], "work"
+        def list_aliases(self) -> tuple[list[AliasListEntry], str | None]:
+            return [
+                AliasListEntry(alias="personal", plan_type=None),
+                AliasListEntry(alias="work", plan_type="pro"),
+            ], "work"
 
     monkeypatch.setattr("codex_switch.cli.build_default_manager", lambda: FakeManager())
 
@@ -286,7 +376,7 @@ def test_main_dispatches_list(monkeypatch, capsys):
 
     captured = capsys.readouterr()
     assert result == 0
-    assert captured.out.splitlines() == ["  personal", "* work"]
+    assert captured.out.splitlines() == ["  personal", "* work -- pro"]
 
 
 def test_main_dispatches_remove(monkeypatch, capsys):

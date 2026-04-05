@@ -121,7 +121,7 @@ def make_runtime(tmp_path, *, rpc_results, pty_snapshots=(), fail_resume: bool =
         accounts=accounts,
         state=state,
         ensure_safe_to_mutate=lambda: None,
-        login_runner=lambda: None,
+        login_runner=lambda _mode: None,
         automation=store,
         soft_switch_threshold=95.0,
     )

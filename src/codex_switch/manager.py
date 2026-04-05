@@ -9,13 +9,20 @@ from pathlib import Path
 from typing import Callable
 
 from codex_switch.accounts import AccountStore
-from codex_switch.automation_db import AutomationStore, RateLimitRecord, SwitchEventRecord
+from codex_switch.automation_db import AliasRecord, AutomationStore, RateLimitRecord, SwitchEventRecord
 from codex_switch.automation_models import HandoffPhase, RateLimitSnapshot, RateLimitWindow
 from codex_switch.automation_policy import choose_target_alias, should_trigger_soft_switch
 from codex_switch.daemon_controller import DaemonController
-from codex_switch.errors import ActiveAliasRemovalError, AutomationHandoffError, LoginCaptureError
+from codex_switch.errors import (
+    ActiveAliasRemovalError,
+    AutomationDatabaseError,
+    AutomationHandoffError,
+    LoginCaptureError,
+)
 from codex_switch.fs import atomic_write_bytes, ensure_private_dir, file_digest
 from codex_switch.models import (
+    AliasListEntry,
+    AliasTelemetryObservation,
     AppPaths,
     AppState,
     AutoSourceResult,
@@ -47,6 +54,7 @@ class CodexSwitchManager:
         daemon_controller: DaemonController | None = None,
         soft_switch_threshold: float = 95.0,
         resume_runner: Callable[[str], None] = run_codex_resume,
+        alias_metadata_probe: Callable[[str], AliasTelemetryObservation | None] | None = None,
     ) -> None:
         self._paths = paths
         self._accounts = accounts
@@ -59,10 +67,146 @@ class CodexSwitchManager:
         )
         self._soft_switch_threshold = soft_switch_threshold
         self._resume_runner = resume_runner
+        self._alias_metadata_probe = alias_metadata_probe
 
-    def list_aliases(self) -> tuple[list[str], str | None]:
+    def list_aliases(self) -> tuple[list[AliasListEntry], str | None]:
         current = self._state.load()
-        return self._accounts.list_aliases(), current.active_alias
+        aliases = self._accounts.list_aliases()
+        metadata = self._metadata_by_alias()
+        entries = self._build_alias_entries(aliases, metadata)
+
+        unresolved_aliases = [entry.alias for entry in entries if entry.plan_type is None]
+        if unresolved_aliases and self._alias_metadata_probe is not None:
+            refreshed = self._refresh_missing_alias_metadata(
+                unresolved_aliases=unresolved_aliases,
+                previous_state=current,
+                metadata=metadata,
+            )
+            if refreshed:
+                metadata = self._metadata_by_alias()
+                entries = self._build_alias_entries(aliases, metadata)
+
+        return entries, current.active_alias
+
+    def _metadata_by_alias(self) -> dict[str, AliasRecord]:
+        if not self._paths.automation_db_file.exists():
+            return {}
+        try:
+            return {row.alias: row for row in self._automation.list_aliases()}
+        except AutomationDatabaseError:
+            return {}
+
+    def _build_alias_entries(
+        self,
+        aliases: list[str],
+        metadata: dict[str, AliasRecord],
+    ) -> list[AliasListEntry]:
+        return [
+            AliasListEntry(
+                alias=alias,
+                plan_type=_normalize_plan_type(
+                    None if alias not in metadata else metadata[alias].account_plan_type
+                ),
+            )
+            for alias in aliases
+        ]
+
+    def _refresh_missing_alias_metadata(
+        self,
+        *,
+        unresolved_aliases: list[str],
+        previous_state: AppState,
+        metadata: dict[str, AliasRecord],
+    ) -> bool:
+        refreshed = False
+        for alias in unresolved_aliases:
+            observation = self._probe_alias_metadata(alias=alias, previous_state=previous_state)
+            plan_type = None if observation is None else _normalize_plan_type(observation.account_plan_type)
+            if observation is None or plan_type is None:
+                continue
+
+            existing = metadata.get(alias)
+            try:
+                self._automation.record_alias_observation(
+                    alias=alias,
+                    account_email=(
+                        observation.account_email
+                        if observation.account_email is not None
+                        else None if existing is None else existing.account_email
+                    ),
+                    account_plan_type=plan_type,
+                    account_fingerprint=(
+                        observation.account_fingerprint
+                        if observation.account_fingerprint is not None
+                        else None if existing is None else existing.account_fingerprint
+                    ),
+                    observed_at=observation.observed_at,
+                )
+            except AutomationDatabaseError:
+                continue
+            refreshed = True
+        return refreshed
+
+    def _probe_alias_metadata(
+        self,
+        *,
+        alias: str,
+        previous_state: AppState,
+    ) -> AliasTelemetryObservation | None:
+        if self._alias_metadata_probe is None:
+            return None
+
+        if alias == previous_state.active_alias:
+            try:
+                return self._alias_metadata_probe(alias)
+            except Exception:
+                return None
+
+        try:
+            self._ensure_safe_to_mutate()
+        except Exception:
+            return None
+
+        backup_path: Path | None = None
+        clear_unmanaged_live_auth = False
+        observation: AliasTelemetryObservation | None = None
+        probe_error: Exception | None = None
+        try:
+            backup_path = self._backup_live_auth()
+            clear_unmanaged_live_auth = True
+            atomic_write_bytes(
+                self._paths.live_auth_file,
+                self._accounts.read_snapshot(alias),
+                mode=0o600,
+                root=self._paths.codex_root,
+            )
+            observation = self._alias_metadata_probe(alias)
+        except Exception as exc:
+            probe_error = exc
+
+        cleanup_errors: list[Exception] = []
+        try:
+            self._restore_previous_live_auth(
+                previous_state,
+                backup_path,
+                clear_unmanaged_live_auth,
+                prefer_live_backup=True,
+            )
+        except Exception as exc:
+            cleanup_errors.append(exc)
+        try:
+            self._state.save(previous_state)
+        except Exception as exc:
+            cleanup_errors.append(exc)
+
+        if len(cleanup_errors) == 1:
+            raise cleanup_errors[0]
+        if cleanup_errors:
+            raise ExceptionGroup("Multiple cleanup failures", cleanup_errors)
+
+        if probe_error is not None:
+            return None
+        return observation
 
     def status(self) -> StatusResult:
         current = self._state.load()
@@ -237,7 +381,24 @@ class CodexSwitchManager:
         previous_state: AppState,
         backup_path: Path | None,
         clear_unmanaged_live_auth: bool,
+        *,
+        prefer_live_backup: bool = False,
     ) -> None:
+        if prefer_live_backup:
+            if backup_path is not None and backup_path.exists():
+                atomic_write_bytes(
+                    self._paths.live_auth_file,
+                    backup_path.read_bytes(),
+                    mode=0o600,
+                    root=self._paths.codex_root,
+                )
+                backup_path.unlink(missing_ok=True)
+                return
+
+            if clear_unmanaged_live_auth and self._paths.live_auth_file.exists():
+                self._paths.live_auth_file.unlink()
+            return
+
         if (
             previous_state.active_alias is not None
             and self._accounts.exists(previous_state.active_alias)
@@ -265,7 +426,7 @@ class CodexSwitchManager:
         if clear_unmanaged_live_auth and self._paths.live_auth_file.exists():
             self._paths.live_auth_file.unlink()
 
-    def add(self, alias: str, login_mode: LoginMode = LoginMode.BROWSER) -> None:
+    def add(self, alias: str, *, login_mode: LoginMode = LoginMode.BROWSER) -> None:
         self._ensure_safe_to_mutate()
         self._accounts.assert_missing(alias)
         previous_state = self._state.load()
@@ -364,3 +525,10 @@ def _rate_limit_record_to_snapshot(record: RateLimitRecord) -> RateLimitSnapshot
         credits_balance=record.credits_balance,
         observed_at=record.observed_at,
     )
+
+
+def _normalize_plan_type(plan_type: str | None) -> str | None:
+    if plan_type is None:
+        return None
+    normalized = plan_type.strip()
+    return normalized or None

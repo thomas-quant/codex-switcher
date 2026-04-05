@@ -71,7 +71,7 @@ def make_manager(tmp_path):
         accounts=accounts,
         state=state,
         ensure_safe_to_mutate=lambda: None,
-        login_runner=lambda: None,
+        login_runner=lambda _mode: None,
         automation=automation,
         daemon_controller=daemon,
         soft_switch_threshold=95.0,
