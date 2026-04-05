@@ -6,6 +6,10 @@ build-backend = "setuptools.build_meta"
 name = "codex-switch"
 version = "0.1.0"
 description = "Rotate Codex auth snapshots across multiple account aliases"
+license = { file = "LICENSE" }
+classifiers = [
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+]
 requires-python = ">=3.11"
 dependencies = ["psutil>=6,<7"]
 
