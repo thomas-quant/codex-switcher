@@ -1,7 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
+
+
+class LoginMode(str, Enum):
+    BROWSER = "browser"
+    DEVICE_AUTH = "device_auth"
 
 
 @dataclass(slots=True, frozen=True)
@@ -54,3 +60,17 @@ class AutoSourceResult:
     alias: str
     observed_via: str | None
     observed_at: str | None
+
+
+@dataclass(slots=True, frozen=True)
+class AliasListEntry:
+    alias: str
+    plan_type: str | None
+
+
+@dataclass(slots=True, frozen=True)
+class AliasTelemetryObservation:
+    account_email: str | None
+    account_plan_type: str | None
+    account_fingerprint: str | None
+    observed_at: str
