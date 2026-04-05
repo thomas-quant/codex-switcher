@@ -1,6 +1,9 @@
+from types import SimpleNamespace
+
 import pytest
 
 from codex_switch.automation_db import SwitchEventRecord
+from codex_switch.cli import build_default_manager
 from codex_switch.cli import build_parser
 from codex_switch.cli import format_alias_lines
 from codex_switch.cli import format_auto_history_lines
@@ -10,7 +13,7 @@ from codex_switch.cli import format_daemon_status_lines
 from codex_switch.cli import format_status_lines
 from codex_switch.cli import main
 from codex_switch.errors import CodexSwitchError
-from codex_switch.models import AutoSourceResult, AutoStatusResult, DaemonStatusResult, StatusResult
+from codex_switch.models import AutoSourceResult, AutoStatusResult, DaemonStatusResult, LoginMode, StatusResult
 
 
 def test_build_parser_registers_expected_subcommands():
@@ -34,6 +37,44 @@ def test_build_parser_add_includes_alias_argument():
 
     assert namespace.command == "add"
     assert namespace.alias == "work"
+
+
+def test_build_parser_add_accepts_device_auth_flag():
+    parser = build_parser()
+
+    namespace = parser.parse_args(["add", "work", "--device-auth"])
+
+    assert namespace.command == "add"
+    assert namespace.alias == "work"
+    assert namespace.device_auth is True
+
+
+def test_build_default_manager_threads_login_mode_through_runner(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeManager:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("codex_switch.cli.CodexSwitchManager", FakeManager)
+    monkeypatch.setattr(
+        "codex_switch.cli.resolve_paths",
+        lambda: SimpleNamespace(accounts_dir=object(), state_file=object()),
+    )
+    monkeypatch.setattr("codex_switch.cli.AccountStore", lambda _path: object())
+    monkeypatch.setattr("codex_switch.cli.StateStore", lambda _path: object())
+    monkeypatch.setattr("codex_switch.process_guard.ensure_codex_not_running", lambda: None)
+    monkeypatch.setattr(
+        "codex_switch.codex_login.run_codex_login",
+        lambda login_mode=LoginMode.BROWSER: captured.setdefault("login_mode", login_mode),
+    )
+
+    build_default_manager()
+
+    login_runner = captured["login_runner"]
+    assert callable(login_runner)
+    login_runner(LoginMode.DEVICE_AUTH)
+    assert captured["login_mode"] == LoginMode.DEVICE_AUTH
 
 
 @pytest.mark.parametrize("command", ["add", "use", "remove"])
@@ -199,6 +240,23 @@ def test_main_dispatches_add(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert result == 0
     assert calls == [("add", "work")]
+    assert captured.out == "added alias: work\n"
+
+
+def test_main_dispatches_add_device_auth(monkeypatch, capsys):
+    calls: list[tuple[str, str, LoginMode]] = []
+
+    class FakeManager:
+        def add(self, alias: str, login_mode: LoginMode = LoginMode.BROWSER) -> None:
+            calls.append(("add", alias, login_mode))
+
+    monkeypatch.setattr("codex_switch.cli.build_default_manager", lambda: FakeManager())
+
+    result = main(["add", "work", "--device-auth"])
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert calls == [("add", "work", LoginMode.DEVICE_AUTH)]
     assert captured.out == "added alias: work\n"
 
 

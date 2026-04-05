@@ -7,7 +7,13 @@ from codex_switch.automation_db import SwitchEventRecord
 from codex_switch.accounts import AccountStore
 from codex_switch.errors import CodexSwitchError
 from codex_switch.manager import CodexSwitchManager
-from codex_switch.models import AutoSourceResult, AutoStatusResult, DaemonStatusResult, StatusResult
+from codex_switch.models import (
+    AutoSourceResult,
+    AutoStatusResult,
+    DaemonStatusResult,
+    LoginMode,
+    StatusResult,
+)
 from codex_switch.paths import resolve_paths
 from codex_switch.state import StateStore
 
@@ -20,6 +26,8 @@ def build_parser() -> argparse.ArgumentParser:
         child = subparsers.add_parser(name)
         if name in {"add", "use", "remove"}:
             child.add_argument("alias")
+        if name == "add":
+            child.add_argument("--device-auth", action="store_true")
 
     daemon_parser = subparsers.add_parser("daemon")
     daemon_subparsers = daemon_parser.add_subparsers(dest="daemon_command", required=True)
@@ -157,7 +165,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         if args.command == "add":
-            manager.add(args.alias)
+            if args.device_auth:
+                manager.add(args.alias, login_mode=LoginMode.DEVICE_AUTH)
+            else:
+                manager.add(args.alias)
             print(f"added alias: {args.alias}")
         elif args.command == "use":
             manager.use(args.alias)

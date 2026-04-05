@@ -21,6 +21,7 @@ from codex_switch.models import (
     AutoSourceResult,
     AutoStatusResult,
     DaemonStatusResult,
+    LoginMode,
     StatusResult,
 )
 from codex_switch.state import StateStore
@@ -41,7 +42,7 @@ class CodexSwitchManager:
         accounts: AccountStore,
         state: StateStore,
         ensure_safe_to_mutate: Callable[[], None],
-        login_runner: Callable[[], None],
+        login_runner: Callable[[LoginMode], None],
         automation: AutomationStore | None = None,
         daemon_controller: DaemonController | None = None,
         soft_switch_threshold: float = 95.0,
@@ -264,7 +265,7 @@ class CodexSwitchManager:
         if clear_unmanaged_live_auth and self._paths.live_auth_file.exists():
             self._paths.live_auth_file.unlink()
 
-    def add(self, alias: str) -> None:
+    def add(self, alias: str, *, login_mode: LoginMode = LoginMode.BROWSER) -> None:
         self._ensure_safe_to_mutate()
         self._accounts.assert_missing(alias)
         previous_state = self._state.load()
@@ -277,7 +278,7 @@ class CodexSwitchManager:
             self._sync_active_snapshot_from_live_auth(previous_state)
             backup_path = self._backup_live_auth()
             clear_unmanaged_live_auth = True
-            self._login_runner()
+            self._login_runner(login_mode)
             if not self._paths.live_auth_file.exists():
                 raise LoginCaptureError("codex login did not leave ~/.codex/auth.json behind")
             self._accounts.write_snapshot_from_file(alias, self._paths.live_auth_file)

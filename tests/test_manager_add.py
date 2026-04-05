@@ -5,7 +5,7 @@ import pytest
 from codex_switch.accounts import AccountStore
 from codex_switch.errors import AliasAlreadyExistsError, LoginCaptureError
 from codex_switch.manager import CodexSwitchManager
-from codex_switch.models import AppState
+from codex_switch.models import AppState, LoginMode
 from codex_switch.paths import resolve_paths
 from codex_switch.state import StateStore
 
@@ -34,7 +34,8 @@ def make_manager(tmp_path, login_runner):
 
 
 def test_add_captures_new_alias_and_restores_previous_active_auth(tmp_path):
-    def login_runner() -> None:
+    def login_runner(login_mode: LoginMode) -> None:
+        assert login_mode == LoginMode.BROWSER
         paths.live_auth_file.parent.mkdir(parents=True, exist_ok=True)
         paths.live_auth_file.write_bytes(b'{"token":"new-login"}')
 
@@ -54,7 +55,7 @@ def test_add_captures_new_alias_and_restores_previous_active_auth(tmp_path):
 
 
 def test_add_rolls_back_when_login_does_not_produce_auth(tmp_path):
-    manager, paths, accounts, state, guard = make_manager(tmp_path, lambda: None)
+    manager, paths, accounts, state, guard = make_manager(tmp_path, lambda _login_mode: None)
     accounts.write_snapshot_from_bytes("work", b'{"token":"snapshot-work"}')
     state.save(AppState(active_alias="work", updated_at="2026-03-31T12:00:00Z"))
     paths.live_auth_file.parent.mkdir(parents=True, exist_ok=True)
@@ -77,8 +78,9 @@ def test_add_rolls_back_when_login_does_not_produce_auth(tmp_path):
 def test_add_rejects_existing_alias(tmp_path):
     login_calls = 0
 
-    def login_runner() -> None:
+    def login_runner(login_mode: LoginMode) -> None:
         nonlocal login_calls
+        assert login_mode == LoginMode.BROWSER
         login_calls += 1
 
     manager, paths, accounts, state, guard = make_manager(tmp_path, login_runner)
@@ -98,7 +100,8 @@ def test_add_rejects_existing_alias(tmp_path):
 
 
 def test_add_restores_backup_when_no_active_alias(tmp_path):
-    def login_runner() -> None:
+    def login_runner(login_mode: LoginMode) -> None:
+        assert login_mode == LoginMode.BROWSER
         paths.live_auth_file.parent.mkdir(parents=True, exist_ok=True)
         paths.live_auth_file.write_bytes(b'{"token":"new-login"}')
 
@@ -117,7 +120,7 @@ def test_add_restores_backup_when_no_active_alias(tmp_path):
 
 
 def test_add_preserves_login_failure_when_restore_also_fails(tmp_path, monkeypatch):
-    manager, paths, accounts, state, guard = make_manager(tmp_path, lambda: None)
+    manager, paths, accounts, state, guard = make_manager(tmp_path, lambda _login_mode: None)
     state.save(AppState(active_alias=None, updated_at="2026-03-31T12:00:00Z"))
     paths.live_auth_file.parent.mkdir(parents=True, exist_ok=True)
     paths.live_auth_file.write_bytes(b'{"token":"live-before-login"}')
@@ -138,7 +141,7 @@ def test_add_preserves_login_failure_when_restore_also_fails(tmp_path, monkeypat
 
 
 def test_add_preserves_live_auth_when_backup_creation_fails(tmp_path, monkeypatch):
-    manager, paths, accounts, state, guard = make_manager(tmp_path, lambda: None)
+    manager, paths, accounts, state, guard = make_manager(tmp_path, lambda _login_mode: None)
     state.save(AppState(active_alias=None, updated_at="2026-03-31T12:00:00Z"))
     paths.live_auth_file.parent.mkdir(parents=True, exist_ok=True)
     paths.live_auth_file.write_bytes(b'{"token":"live-before-backup"}')
@@ -159,7 +162,8 @@ def test_add_preserves_live_auth_when_backup_creation_fails(tmp_path, monkeypatc
 
 
 def test_add_rolls_back_captured_alias_when_cleanup_fails(tmp_path, monkeypatch):
-    def login_runner() -> None:
+    def login_runner(login_mode: LoginMode) -> None:
+        assert login_mode == LoginMode.BROWSER
         paths.live_auth_file.parent.mkdir(parents=True, exist_ok=True)
         paths.live_auth_file.write_bytes(b'{"token":"new-login"}')
 
@@ -181,7 +185,8 @@ def test_add_rolls_back_captured_alias_when_cleanup_fails(tmp_path, monkeypatch)
 
 
 def test_add_rolls_back_alias_when_snapshot_write_raises_after_writing(tmp_path, monkeypatch):
-    def login_runner() -> None:
+    def login_runner(login_mode: LoginMode) -> None:
+        assert login_mode == LoginMode.BROWSER
         paths.live_auth_file.parent.mkdir(parents=True, exist_ok=True)
         paths.live_auth_file.write_bytes(b'{"token":"new-login"}')
 
@@ -203,3 +208,21 @@ def test_add_rolls_back_alias_when_snapshot_write_raises_after_writing(tmp_path,
 
     assert guard.calls == 1
     assert not accounts.exists("personal")
+
+
+def test_add_passes_selected_login_mode_to_runner(tmp_path):
+    login_modes: list[LoginMode] = []
+
+    def login_runner(login_mode: LoginMode) -> None:
+        login_modes.append(login_mode)
+        paths.live_auth_file.parent.mkdir(parents=True, exist_ok=True)
+        paths.live_auth_file.write_bytes(b'{"token":"device-auth"}')
+
+    manager, paths, accounts, state, guard = make_manager(tmp_path, login_runner)
+    state.save(AppState(active_alias=None, updated_at="2026-03-31T12:00:00Z"))
+
+    manager.add("personal", login_mode=LoginMode.DEVICE_AUTH)
+
+    assert guard.calls == 1
+    assert login_modes == [LoginMode.DEVICE_AUTH]
+    assert accounts.read_snapshot("personal") == b'{"token":"device-auth"}'
