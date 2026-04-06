@@ -30,7 +30,17 @@ Captures a fresh `codex login` session into a named snapshot. The existing activ
 
 ### `codex-switch list`
 
-Lists configured aliases. The active alias is marked with `*`. When the local telemetry cache knows the account plan type, `list` renders `alias -- type`; otherwise it prints the alias name only. Missing plan types are refreshed best-effort during `list` when telemetry probing is available, and successful refreshes are written back to the local telemetry cache.
+Lists configured aliases. The active alias is marked with `*`. `list` shows the cached or freshly probed account plan type plus remaining 5-hour and weekly usage when telemetry is available. Missing usage values render as `?`.
+
+Display mode is controlled by `~/.codex-switch/config.json`:
+
+```json
+{
+  "list_format": "labelled"
+}
+```
+
+Accepted values are `labelled` and `table`. Missing or invalid config falls back to `labelled`.
 
 ### `codex-switch use <alias>`
 
@@ -107,10 +117,23 @@ codex-switch add gamma
 codex-switch add delta
 codex-switch add epsilon
 codex-switch list
-# * beta -- plus
-#   gamma -- pro
-#   delta
-#   epsilon
+```
+
+Labelled output:
+
+```text
+  beta -- plus -- 5h left: ? -- weekly left: ?
+  gamma -- pro -- 5h left: ? -- weekly left: ?
+  delta -- 5h left: ? -- weekly left: ?
+* epsilon -- 5h left: ? -- weekly left: ?
+```
+
+Table mode config:
+
+```json
+{
+  "list_format": "table"
+}
 ```
 
 Switch accounts when you hit limits:
