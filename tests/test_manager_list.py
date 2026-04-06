@@ -426,6 +426,78 @@ def test_list_aliases_includes_cached_remaining_usage(tmp_path):
     assert active_alias == "beta"
 
 
+def test_list_aliases_prefers_codex_snapshot_when_same_timestamp_snapshots_exist(tmp_path):
+    manager, _paths, accounts, state, store, _guard = make_manager(tmp_path)
+    accounts.write_snapshot_from_bytes("beta", b"{}")
+    store.reconcile_aliases(["beta"])
+    store.record_alias_observation(
+        alias="beta",
+        account_email="beta@example.com",
+        account_plan_type="plus",
+        account_fingerprint="fp-beta",
+        observed_at="2026-04-06T00:00:00Z",
+    )
+    store.upsert_rate_limit(
+        RateLimitSnapshot(
+            alias="beta",
+            limit_id="aaa-other",
+            limit_name="other",
+            observed_via=UsageSource.RPC,
+            plan_type="plus",
+            primary_window=RateLimitWindow(
+                used_percent=10,
+                resets_at="2026-04-06T05:00:00Z",
+                window_duration_mins=300,
+            ),
+            secondary_window=RateLimitWindow(
+                used_percent=20,
+                resets_at="2026-04-10T00:00:00Z",
+                window_duration_mins=10080,
+            ),
+            credits_has_credits=None,
+            credits_unlimited=None,
+            credits_balance=None,
+            observed_at="2026-04-06T00:00:00Z",
+        )
+    )
+    store.upsert_rate_limit(
+        RateLimitSnapshot(
+            alias="beta",
+            limit_id="codex",
+            limit_name="codex",
+            observed_via=UsageSource.RPC,
+            plan_type="plus",
+            primary_window=RateLimitWindow(
+                used_percent=58,
+                resets_at="2026-04-06T05:00:00Z",
+                window_duration_mins=300,
+            ),
+            secondary_window=RateLimitWindow(
+                used_percent=29,
+                resets_at="2026-04-10T00:00:00Z",
+                window_duration_mins=10080,
+            ),
+            credits_has_credits=None,
+            credits_unlimited=None,
+            credits_balance=None,
+            observed_at="2026-04-06T00:00:00Z",
+        )
+    )
+    state.save(AppState(active_alias="beta", updated_at="2026-04-06T00:00:00Z"))
+
+    entries, active_alias = manager.list_aliases()
+
+    assert entries == [
+        AliasListEntry(
+            alias="beta",
+            plan_type="plus",
+            five_hour_left_percent=42,
+            weekly_left_percent=71,
+        )
+    ]
+    assert active_alias == "beta"
+
+
 def test_list_aliases_refreshes_missing_usage_and_persists_rate_limits(tmp_path):
     def alias_metadata_probe(alias: str) -> AliasTelemetryObservation | None:
         return AliasTelemetryObservation(

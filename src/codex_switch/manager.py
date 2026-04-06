@@ -111,7 +111,7 @@ class CodexSwitchManager:
         rows: dict[str, RateLimitRecord] = {}
         for alias in aliases:
             try:
-                latest = self._automation.latest_rate_limit_for_alias(alias)
+                latest = _choose_display_rate_limit(self._automation.list_rate_limits_for_alias(alias))
             except AutomationDatabaseError:
                 return {}
             if latest is not None:
@@ -579,3 +579,15 @@ def _remaining_percent(used_percent: float | None) -> int | None:
         return None
     remaining = int(round(100 - used_percent))
     return max(0, min(100, remaining))
+
+
+def _choose_display_rate_limit(rows: list[RateLimitRecord]) -> RateLimitRecord | None:
+    if not rows:
+        return None
+    for row in rows:
+        if row.limit_id == "codex":
+            return row
+    for row in rows:
+        if row.primary_used_percent is not None and row.secondary_used_percent is not None:
+            return row
+    return rows[0]

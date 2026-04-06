@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from codex_switch.automation_models import RateLimitSnapshot, RateLimitWindow, UsageSource
 from codex_switch.automation_db import SwitchEventRecord
 from codex_switch.cli import build_default_manager
 from codex_switch.cli import build_parser
@@ -13,6 +14,7 @@ from codex_switch.cli import format_daemon_status_lines
 from codex_switch.cli import format_status_lines
 from codex_switch.cli import main
 from codex_switch.errors import CodexSwitchError
+from codex_switch.errors import AutomationSourceUnavailableError
 from codex_switch.models import (
     AliasListEntry,
     AutoSourceResult,
@@ -134,6 +136,170 @@ def test_build_default_manager_uses_fresh_rpc_source_per_alias_probe(monkeypatch
     assert rpc_instances == [1, 2]
     assert first.account_plan_type == "plan-1"
     assert second.account_plan_type == "plan-2"
+
+
+def test_build_default_manager_probe_returns_rate_limits_without_account_identity(monkeypatch):
+    captured: dict[str, object] = {}
+    snapshots = [
+        RateLimitSnapshot(
+            alias="alpha",
+            limit_id="codex",
+            limit_name="codex",
+            observed_via=UsageSource.RPC,
+            plan_type=None,
+            primary_window=RateLimitWindow(used_percent=58, resets_at="2026-04-06T05:00:00Z", window_duration_mins=300),
+            secondary_window=RateLimitWindow(used_percent=29, resets_at="2026-04-10T00:00:00Z", window_duration_mins=10080),
+            credits_has_credits=None,
+            credits_unlimited=None,
+            credits_balance=None,
+            observed_at="2026-04-06T00:00:00Z",
+        )
+    ]
+
+    class FakeManager:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    class FakeRpcSource:
+        def poll(self, *, active_alias: str):
+            return SimpleNamespace(account_identity=None, rate_limits=snapshots)
+
+    class FakePtySource:
+        def probe(self, *, alias: str, observed_at: str):
+            raise AssertionError("PTY fallback should not be used")
+
+    monkeypatch.setattr("codex_switch.cli.CodexSwitchManager", FakeManager)
+    monkeypatch.setattr(
+        "codex_switch.cli.resolve_paths",
+        lambda: SimpleNamespace(accounts_dir=object(), state_file=object()),
+    )
+    monkeypatch.setattr("codex_switch.cli.AccountStore", lambda _path: object())
+    monkeypatch.setattr("codex_switch.cli.StateStore", lambda _path: object())
+    monkeypatch.setattr("codex_switch.process_guard.ensure_codex_not_running", lambda: None)
+    monkeypatch.setattr("codex_switch.codex_login.run_codex_login", lambda _login_mode=LoginMode.BROWSER: None)
+    monkeypatch.setattr("codex_switch.daemon_runtime.AppServerRpcSource", FakeRpcSource)
+    monkeypatch.setattr("codex_switch.daemon_runtime.CodexCliPtySource", FakePtySource)
+
+    build_default_manager()
+
+    observation = captured["alias_metadata_probe"]("alpha")
+
+    assert observation is not None
+    assert observation.account_plan_type is None
+    assert observation.rate_limits == tuple(snapshots)
+
+
+def test_build_default_manager_probe_wraps_pty_snapshot_in_rate_limits(monkeypatch):
+    captured: dict[str, object] = {}
+    snapshot = RateLimitSnapshot(
+        alias="alpha",
+        limit_id="codex",
+        limit_name="codex",
+        observed_via=UsageSource.PTY,
+        plan_type="plus",
+        primary_window=RateLimitWindow(used_percent=34, resets_at="2026-04-06T05:00:00Z", window_duration_mins=300),
+        secondary_window=RateLimitWindow(used_percent=67, resets_at="2026-04-10T00:00:00Z", window_duration_mins=10080),
+        credits_has_credits=None,
+        credits_unlimited=None,
+        credits_balance=None,
+        observed_at="2026-04-06T00:12:00Z",
+    )
+
+    class FakeManager:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    class FakeRpcSource:
+        def poll(self, *, active_alias: str):
+            raise AutomationSourceUnavailableError("rpc unavailable")
+
+    class FakePtySource:
+        def probe(self, *, alias: str, observed_at: str):
+            return snapshot
+
+    monkeypatch.setattr("codex_switch.cli.CodexSwitchManager", FakeManager)
+    monkeypatch.setattr(
+        "codex_switch.cli.resolve_paths",
+        lambda: SimpleNamespace(accounts_dir=object(), state_file=object()),
+    )
+    monkeypatch.setattr("codex_switch.cli.AccountStore", lambda _path: object())
+    monkeypatch.setattr("codex_switch.cli.StateStore", lambda _path: object())
+    monkeypatch.setattr("codex_switch.process_guard.ensure_codex_not_running", lambda: None)
+    monkeypatch.setattr("codex_switch.codex_login.run_codex_login", lambda _login_mode=LoginMode.BROWSER: None)
+    monkeypatch.setattr("codex_switch.daemon_runtime.AppServerRpcSource", FakeRpcSource)
+    monkeypatch.setattr("codex_switch.daemon_runtime.CodexCliPtySource", FakePtySource)
+
+    build_default_manager()
+
+    observation = captured["alias_metadata_probe"]("alpha")
+
+    assert observation is not None
+    assert observation.account_plan_type == "plus"
+    assert observation.rate_limits == (snapshot,)
+
+
+def test_build_default_manager_probe_preserves_multiple_rpc_snapshots(monkeypatch):
+    captured: dict[str, object] = {}
+    snapshots = [
+        RateLimitSnapshot(
+            alias="alpha",
+            limit_id="other",
+            limit_name="other",
+            observed_via=UsageSource.RPC,
+            plan_type=None,
+            primary_window=RateLimitWindow(used_percent=10, resets_at="2026-04-06T05:00:00Z", window_duration_mins=300),
+            secondary_window=RateLimitWindow(used_percent=20, resets_at="2026-04-10T00:00:00Z", window_duration_mins=10080),
+            credits_has_credits=None,
+            credits_unlimited=None,
+            credits_balance=None,
+            observed_at="2026-04-06T00:00:00Z",
+        ),
+        RateLimitSnapshot(
+            alias="alpha",
+            limit_id="codex",
+            limit_name="codex",
+            observed_via=UsageSource.RPC,
+            plan_type="plus",
+            primary_window=RateLimitWindow(used_percent=58, resets_at="2026-04-06T05:00:00Z", window_duration_mins=300),
+            secondary_window=RateLimitWindow(used_percent=29, resets_at="2026-04-10T00:00:00Z", window_duration_mins=10080),
+            credits_has_credits=None,
+            credits_unlimited=None,
+            credits_balance=None,
+            observed_at="2026-04-06T00:01:00Z",
+        ),
+    ]
+
+    class FakeManager:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    class FakeRpcSource:
+        def poll(self, *, active_alias: str):
+            return SimpleNamespace(account_identity=None, rate_limits=snapshots)
+
+    class FakePtySource:
+        def probe(self, *, alias: str, observed_at: str):
+            raise AssertionError("PTY fallback should not be used")
+
+    monkeypatch.setattr("codex_switch.cli.CodexSwitchManager", FakeManager)
+    monkeypatch.setattr(
+        "codex_switch.cli.resolve_paths",
+        lambda: SimpleNamespace(accounts_dir=object(), state_file=object()),
+    )
+    monkeypatch.setattr("codex_switch.cli.AccountStore", lambda _path: object())
+    monkeypatch.setattr("codex_switch.cli.StateStore", lambda _path: object())
+    monkeypatch.setattr("codex_switch.process_guard.ensure_codex_not_running", lambda: None)
+    monkeypatch.setattr("codex_switch.codex_login.run_codex_login", lambda _login_mode=LoginMode.BROWSER: None)
+    monkeypatch.setattr("codex_switch.daemon_runtime.AppServerRpcSource", FakeRpcSource)
+    monkeypatch.setattr("codex_switch.daemon_runtime.CodexCliPtySource", FakePtySource)
+
+    build_default_manager()
+
+    observation = captured["alias_metadata_probe"]("alpha")
+
+    assert observation is not None
+    assert observation.account_plan_type == "plus"
+    assert observation.rate_limits == tuple(snapshots)
 
 
 @pytest.mark.parametrize("command", ["add", "use", "remove"])
