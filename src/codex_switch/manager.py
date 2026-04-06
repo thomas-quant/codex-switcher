@@ -154,35 +154,37 @@ class CodexSwitchManager:
         refreshed = False
         for alias in unresolved_aliases:
             observation = self._probe_alias_metadata(alias=alias, previous_state=previous_state)
-            plan_type = None if observation is None else _normalize_plan_type(observation.account_plan_type)
-            if observation is None or plan_type is None:
+            if observation is None:
                 continue
 
-            existing = metadata.get(alias)
-            try:
-                self._automation.record_alias_observation(
-                    alias=alias,
-                    account_email=(
-                        observation.account_email
-                        if observation.account_email is not None
-                        else None if existing is None else existing.account_email
-                    ),
-                    account_plan_type=plan_type,
-                    account_fingerprint=(
-                        observation.account_fingerprint
-                        if observation.account_fingerprint is not None
-                        else None if existing is None else existing.account_fingerprint
-                    ),
-                    observed_at=observation.observed_at,
-                )
-            except AutomationDatabaseError:
-                continue
+            plan_type = _normalize_plan_type(observation.account_plan_type)
+            if plan_type is not None:
+                existing = metadata.get(alias)
+                try:
+                    self._automation.record_alias_observation(
+                        alias=alias,
+                        account_email=(
+                            observation.account_email
+                            if observation.account_email is not None
+                            else None if existing is None else existing.account_email
+                        ),
+                        account_plan_type=plan_type,
+                        account_fingerprint=(
+                            observation.account_fingerprint
+                            if observation.account_fingerprint is not None
+                            else None if existing is None else existing.account_fingerprint
+                        ),
+                        observed_at=observation.observed_at,
+                    )
+                except AutomationDatabaseError:
+                    continue
+                refreshed = True
             for snapshot in observation.rate_limits:
                 try:
                     self._automation.upsert_rate_limit(snapshot)
                 except AutomationDatabaseError:
                     continue
-            refreshed = True
+                refreshed = True
         return refreshed
 
     def _probe_alias_metadata(

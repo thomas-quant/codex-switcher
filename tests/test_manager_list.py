@@ -482,6 +482,64 @@ def test_list_aliases_refreshes_missing_usage_and_persists_rate_limits(tmp_path)
     assert latest.secondary_used_percent == 29
 
 
+def test_list_aliases_refreshes_usage_without_plan_type_and_persists_rate_limits(tmp_path):
+    def alias_metadata_probe(alias: str) -> AliasTelemetryObservation | None:
+        return AliasTelemetryObservation(
+            account_email=None,
+            account_plan_type=None,
+            account_fingerprint=None,
+            observed_at="2026-04-06T00:12:00Z",
+            rate_limits=(
+                RateLimitSnapshot(
+                    alias=alias,
+                    limit_id="codex",
+                    limit_name="codex",
+                    observed_via=UsageSource.PTY,
+                    plan_type=None,
+                    primary_window=RateLimitWindow(
+                        used_percent=34,
+                        resets_at="2026-04-06T05:00:00Z",
+                        window_duration_mins=300,
+                    ),
+                    secondary_window=RateLimitWindow(
+                        used_percent=67,
+                        resets_at="2026-04-10T00:00:00Z",
+                        window_duration_mins=10080,
+                    ),
+                    credits_has_credits=None,
+                    credits_unlimited=None,
+                    credits_balance=None,
+                    observed_at="2026-04-06T00:12:00Z",
+                ),
+            ),
+        )
+
+    manager, _paths, accounts, state, store, _guard = make_manager(
+        tmp_path,
+        alias_metadata_probe=alias_metadata_probe,
+    )
+    accounts.write_snapshot_from_bytes("beta", b"{}")
+    store.reconcile_aliases(["beta"])
+    state.save(AppState(active_alias="beta", updated_at="2026-04-06T00:00:00Z"))
+
+    entries, active_alias = manager.list_aliases()
+
+    assert entries == [
+        AliasListEntry(
+            alias="beta",
+            plan_type=None,
+            five_hour_left_percent=66,
+            weekly_left_percent=33,
+        )
+    ]
+    assert active_alias == "beta"
+    latest = store.latest_rate_limit_for_alias("beta")
+    assert latest is not None
+    assert latest.observed_via == UsageSource.PTY
+    assert latest.primary_used_percent == 34
+    assert latest.secondary_used_percent == 67
+
+
 def test_list_aliases_refreshes_missing_usage_for_inactive_alias_and_restores_auth(tmp_path):
     def alias_metadata_probe(alias: str) -> AliasTelemetryObservation | None:
         if alias != "backup":
