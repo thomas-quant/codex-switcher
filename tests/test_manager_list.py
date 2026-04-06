@@ -573,7 +573,6 @@ def test_list_aliases_prefers_codex_snapshot_when_same_timestamp_snapshots_exist
 def test_list_aliases_uses_cached_rate_limit_plan_type_when_alias_metadata_is_missing(tmp_path):
     manager, _paths, accounts, state, store, _guard = make_manager(tmp_path)
     accounts.write_snapshot_from_bytes("beta", b"{}")
-    store.reconcile_aliases(["beta"])
     store.upsert_rate_limit(
         RateLimitSnapshot(
             alias="beta",
@@ -598,6 +597,8 @@ def test_list_aliases_uses_cached_rate_limit_plan_type_when_alias_metadata_is_mi
         )
     )
     state.save(AppState(active_alias="beta", updated_at="2026-04-06T00:00:00Z"))
+
+    assert store.list_aliases() == []
 
     entries, active_alias = manager.list_aliases()
 
