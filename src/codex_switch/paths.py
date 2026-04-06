@@ -19,4 +19,5 @@ def resolve_paths(home: Path | None = None) -> AppPaths:
         daemon_log_dir=switch_root / "logs",
         accounts_dir=switch_root / "accounts",
         state_file=switch_root / "state.json",
+        config_file=switch_root / "config.json",
     )

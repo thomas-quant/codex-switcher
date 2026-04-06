@@ -4,10 +4,22 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
+from codex_switch.automation_models import RateLimitSnapshot
+
 
 class LoginMode(str, Enum):
     BROWSER = "browser"
     DEVICE_AUTH = "device_auth"
+
+
+class ListFormat(str, Enum):
+    LABELLED = "labelled"
+    TABLE = "table"
+
+
+@dataclass(slots=True, frozen=True)
+class AppConfig:
+    list_format: ListFormat = ListFormat.LABELLED
 
 
 @dataclass(slots=True, frozen=True)
@@ -21,6 +33,7 @@ class AppPaths:
     daemon_log_dir: Path
     accounts_dir: Path
     state_file: Path
+    config_file: Path
 
 
 @dataclass(slots=True, frozen=True)
@@ -74,3 +87,4 @@ class AliasTelemetryObservation:
     account_plan_type: str | None
     account_fingerprint: str | None
     observed_at: str
+    rate_limits: tuple[RateLimitSnapshot, ...] = ()
