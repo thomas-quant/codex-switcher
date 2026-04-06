@@ -73,6 +73,7 @@ def build_default_manager() -> CodexSwitchManager:
                 account_plan_type=snapshot.plan_type,
                 account_fingerprint=None,
                 observed_at=snapshot.observed_at,
+                rate_limits=(snapshot,),
             )
 
         account_identity = poll.account_identity
@@ -84,13 +85,14 @@ def build_default_manager() -> CodexSwitchManager:
                     plan_type = snapshot.plan_type
                     observed_at = snapshot.observed_at
                     break
-        if plan_type is None and account_identity is None:
+        if plan_type is None and account_identity is None and not poll.rate_limits:
             return None
         return AliasTelemetryObservation(
             account_email=None if account_identity is None else account_identity.email,
             account_plan_type=plan_type,
             account_fingerprint=None if account_identity is None else account_identity.fingerprint,
             observed_at=observed_at if observed_at is not None else utc_now(),
+            rate_limits=tuple(poll.rate_limits),
         )
 
     return CodexSwitchManager(

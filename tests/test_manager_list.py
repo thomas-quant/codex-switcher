@@ -4,6 +4,7 @@ import pytest
 
 from codex_switch.accounts import AccountStore
 from codex_switch.automation_db import AutomationStore
+from codex_switch.automation_models import RateLimitSnapshot, RateLimitWindow, UsageSource
 from codex_switch.manager import CodexSwitchManager
 from codex_switch.models import AliasListEntry, AliasTelemetryObservation, AppState
 from codex_switch.paths import resolve_paths
@@ -55,8 +56,18 @@ def test_list_aliases_uses_cached_plan_types(tmp_path):
     entries, active_alias = manager.list_aliases()
 
     assert entries == [
-        AliasListEntry(alias="backup", plan_type=None),
-        AliasListEntry(alias="beta", plan_type="plus"),
+        AliasListEntry(
+            alias="backup",
+            plan_type=None,
+            five_hour_left_percent=None,
+            weekly_left_percent=None,
+        ),
+        AliasListEntry(
+            alias="beta",
+            plan_type="plus",
+            five_hour_left_percent=None,
+            weekly_left_percent=None,
+        ),
     ]
     assert active_alias == "beta"
 
@@ -75,8 +86,18 @@ def test_list_aliases_does_not_create_automation_db_for_cold_cache(tmp_path):
     entries, active_alias = manager.list_aliases()
 
     assert entries == [
-        AliasListEntry(alias="backup", plan_type=None),
-        AliasListEntry(alias="beta", plan_type=None),
+        AliasListEntry(
+            alias="backup",
+            plan_type=None,
+            five_hour_left_percent=None,
+            weekly_left_percent=None,
+        ),
+        AliasListEntry(
+            alias="beta",
+            plan_type=None,
+            five_hour_left_percent=None,
+            weekly_left_percent=None,
+        ),
     ]
     assert active_alias == "beta"
     assert not store._db_file.exists()
@@ -103,7 +124,14 @@ def test_list_aliases_persists_probe_results_for_cold_cache(tmp_path):
 
     entries, active_alias = manager.list_aliases()
 
-    assert entries == [AliasListEntry(alias="beta", plan_type="plus")]
+    assert entries == [
+        AliasListEntry(
+            alias="beta",
+            plan_type="plus",
+            five_hour_left_percent=None,
+            weekly_left_percent=None,
+        )
+    ]
     assert active_alias == "beta"
     assert store._db_file.exists()
     assert store.list_aliases()[0].account_plan_type == "plus"
@@ -124,8 +152,18 @@ def test_list_aliases_falls_back_when_automation_db_is_unavailable(tmp_path):
     entries, active_alias = manager.list_aliases()
 
     assert entries == [
-        AliasListEntry(alias="backup", plan_type=None),
-        AliasListEntry(alias="beta", plan_type=None),
+        AliasListEntry(
+            alias="backup",
+            plan_type=None,
+            five_hour_left_percent=None,
+            weekly_left_percent=None,
+        ),
+        AliasListEntry(
+            alias="beta",
+            plan_type=None,
+            five_hour_left_percent=None,
+            weekly_left_percent=None,
+        ),
     ]
     assert active_alias == "beta"
 
@@ -152,7 +190,14 @@ def test_list_aliases_refreshes_missing_plan_type_for_active_alias(tmp_path):
 
     entries, active_alias = manager.list_aliases()
 
-    assert entries == [AliasListEntry(alias="beta", plan_type="plus")]
+    assert entries == [
+        AliasListEntry(
+            alias="beta",
+            plan_type="plus",
+            five_hour_left_percent=None,
+            weekly_left_percent=None,
+        )
+    ]
     assert active_alias == "beta"
     assert probe_calls == ["beta"]
     assert guard.calls == 0
@@ -186,8 +231,18 @@ def test_list_aliases_refreshes_missing_plan_type_for_inactive_alias_and_restore
     entries, active_alias = manager.list_aliases()
 
     assert entries == [
-        AliasListEntry(alias="backup", plan_type="pro"),
-        AliasListEntry(alias="work", plan_type=None),
+        AliasListEntry(
+            alias="backup",
+            plan_type="pro",
+            five_hour_left_percent=None,
+            weekly_left_percent=None,
+        ),
+        AliasListEntry(
+            alias="work",
+            plan_type=None,
+            five_hour_left_percent=None,
+            weekly_left_percent=None,
+        ),
     ]
     assert active_alias == "work"
     assert probe_calls == ["backup", "work"]
@@ -285,7 +340,14 @@ def test_list_aliases_skips_inactive_refresh_when_mutation_is_unsafe(tmp_path):
 
     entries, active_alias = manager.list_aliases()
 
-    assert entries == [AliasListEntry(alias="backup", plan_type=None)]
+    assert entries == [
+        AliasListEntry(
+            alias="backup",
+            plan_type=None,
+            five_hour_left_percent=None,
+            weekly_left_percent=None,
+        )
+    ]
     assert active_alias is None
     assert probe_calls == []
 
@@ -304,5 +366,183 @@ def test_list_aliases_ignores_probe_failures_and_keeps_plain_alias(tmp_path):
 
     entries, active_alias = manager.list_aliases()
 
-    assert entries == [AliasListEntry(alias="backup", plan_type=None)]
+    assert entries == [
+        AliasListEntry(
+            alias="backup",
+            plan_type=None,
+            five_hour_left_percent=None,
+            weekly_left_percent=None,
+        )
+    ]
     assert active_alias == "backup"
+
+
+def test_list_aliases_includes_cached_remaining_usage(tmp_path):
+    manager, _paths, accounts, state, store, _guard = make_manager(tmp_path)
+    accounts.write_snapshot_from_bytes("beta", b"{}")
+    store.reconcile_aliases(["beta"])
+    store.record_alias_observation(
+        alias="beta",
+        account_email="beta@example.com",
+        account_plan_type="plus",
+        account_fingerprint="fp-beta",
+        observed_at="2026-04-06T00:00:00Z",
+    )
+    store.upsert_rate_limit(
+        RateLimitSnapshot(
+            alias="beta",
+            limit_id="codex",
+            limit_name="codex",
+            observed_via=UsageSource.RPC,
+            plan_type="plus",
+            primary_window=RateLimitWindow(
+                used_percent=58,
+                resets_at="2026-04-06T05:00:00Z",
+                window_duration_mins=300,
+            ),
+            secondary_window=RateLimitWindow(
+                used_percent=29,
+                resets_at="2026-04-10T00:00:00Z",
+                window_duration_mins=10080,
+            ),
+            credits_has_credits=None,
+            credits_unlimited=None,
+            credits_balance=None,
+            observed_at="2026-04-06T00:00:00Z",
+        )
+    )
+    state.save(AppState(active_alias="beta", updated_at="2026-04-06T00:00:00Z"))
+
+    entries, active_alias = manager.list_aliases()
+
+    assert entries == [
+        AliasListEntry(
+            alias="beta",
+            plan_type="plus",
+            five_hour_left_percent=42,
+            weekly_left_percent=71,
+        )
+    ]
+    assert active_alias == "beta"
+
+
+def test_list_aliases_refreshes_missing_usage_and_persists_rate_limits(tmp_path):
+    def alias_metadata_probe(alias: str) -> AliasTelemetryObservation | None:
+        return AliasTelemetryObservation(
+            account_email=f"{alias}@example.com",
+            account_plan_type="plus",
+            account_fingerprint=f"fp-{alias}",
+            observed_at="2026-04-06T00:10:00Z",
+            rate_limits=(
+                RateLimitSnapshot(
+                    alias=alias,
+                    limit_id="codex",
+                    limit_name="codex",
+                    observed_via=UsageSource.RPC,
+                    plan_type="plus",
+                    primary_window=RateLimitWindow(
+                        used_percent=58,
+                        resets_at="2026-04-06T05:00:00Z",
+                        window_duration_mins=300,
+                    ),
+                    secondary_window=RateLimitWindow(
+                        used_percent=29,
+                        resets_at="2026-04-10T00:00:00Z",
+                        window_duration_mins=10080,
+                    ),
+                    credits_has_credits=None,
+                    credits_unlimited=None,
+                    credits_balance=None,
+                    observed_at="2026-04-06T00:10:00Z",
+                ),
+            ),
+        )
+
+    manager, _paths, accounts, state, store, _guard = make_manager(
+        tmp_path,
+        alias_metadata_probe=alias_metadata_probe,
+    )
+    accounts.write_snapshot_from_bytes("beta", b"{}")
+    store.reconcile_aliases(["beta"])
+    state.save(AppState(active_alias="beta", updated_at="2026-04-06T00:00:00Z"))
+
+    entries, _active_alias = manager.list_aliases()
+
+    assert entries == [
+        AliasListEntry(
+            alias="beta",
+            plan_type="plus",
+            five_hour_left_percent=42,
+            weekly_left_percent=71,
+        )
+    ]
+    latest = store.latest_rate_limit_for_alias("beta")
+    assert latest is not None
+    assert latest.primary_used_percent == 58
+    assert latest.secondary_used_percent == 29
+
+
+def test_list_aliases_refreshes_missing_usage_for_inactive_alias_and_restores_auth(tmp_path):
+    def alias_metadata_probe(alias: str) -> AliasTelemetryObservation | None:
+        if alias != "backup":
+            return None
+        return AliasTelemetryObservation(
+            account_email="backup@example.com",
+            account_plan_type="pro",
+            account_fingerprint="fp-backup",
+            observed_at="2026-04-06T00:15:00Z",
+            rate_limits=(
+                RateLimitSnapshot(
+                    alias="backup",
+                    limit_id="codex",
+                    limit_name="codex",
+                    observed_via=UsageSource.RPC,
+                    plan_type="pro",
+                    primary_window=RateLimitWindow(
+                        used_percent=12,
+                        resets_at="2026-04-06T05:00:00Z",
+                        window_duration_mins=300,
+                    ),
+                    secondary_window=RateLimitWindow(
+                        used_percent=88,
+                        resets_at="2026-04-10T00:00:00Z",
+                        window_duration_mins=10080,
+                    ),
+                    credits_has_credits=None,
+                    credits_unlimited=None,
+                    credits_balance=None,
+                    observed_at="2026-04-06T00:15:00Z",
+                ),
+            ),
+        )
+
+    manager, paths, accounts, state, store, guard = make_manager(
+        tmp_path,
+        alias_metadata_probe=alias_metadata_probe,
+    )
+    accounts.write_snapshot_from_bytes("work", b'{"token":"snapshot-work"}')
+    accounts.write_snapshot_from_bytes("backup", b'{"token":"snapshot-backup"}')
+    store.reconcile_aliases(["backup", "work"])
+    state.save(AppState(active_alias="work", updated_at="2026-04-06T00:00:00Z"))
+    paths.live_auth_file.parent.mkdir(parents=True, exist_ok=True)
+    paths.live_auth_file.write_bytes(b'{"token":"live-work"}')
+
+    entries, active_alias = manager.list_aliases()
+
+    assert entries == [
+        AliasListEntry(
+            alias="backup",
+            plan_type="pro",
+            five_hour_left_percent=88,
+            weekly_left_percent=12,
+        ),
+        AliasListEntry(
+            alias="work",
+            plan_type=None,
+            five_hour_left_percent=None,
+            weekly_left_percent=None,
+        ),
+    ]
+    assert active_alias == "work"
+    assert guard.calls == 1
+    assert paths.live_auth_file.read_bytes() == b'{"token":"live-work"}'

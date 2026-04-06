@@ -73,9 +73,16 @@ class CodexSwitchManager:
         current = self._state.load()
         aliases = self._accounts.list_aliases()
         metadata = self._metadata_by_alias()
-        entries = self._build_alias_entries(aliases, metadata)
+        latest_rate_limits = self._latest_rate_limits_by_alias(aliases)
+        entries = self._build_alias_entries(aliases, metadata, latest_rate_limits)
 
-        unresolved_aliases = [entry.alias for entry in entries if entry.plan_type is None]
+        unresolved_aliases = [
+            entry.alias
+            for entry in entries
+            if entry.plan_type is None
+            or entry.five_hour_left_percent is None
+            or entry.weekly_left_percent is None
+        ]
         if unresolved_aliases and self._alias_metadata_probe is not None:
             refreshed = self._refresh_missing_alias_metadata(
                 unresolved_aliases=unresolved_aliases,
@@ -84,7 +91,8 @@ class CodexSwitchManager:
             )
             if refreshed:
                 metadata = self._metadata_by_alias()
-                entries = self._build_alias_entries(aliases, metadata)
+                latest_rate_limits = self._latest_rate_limits_by_alias(aliases)
+                entries = self._build_alias_entries(aliases, metadata, latest_rate_limits)
 
         return entries, current.active_alias
 
@@ -96,20 +104,45 @@ class CodexSwitchManager:
         except AutomationDatabaseError:
             return {}
 
+    def _latest_rate_limits_by_alias(self, aliases: list[str]) -> dict[str, RateLimitRecord]:
+        if not self._paths.automation_db_file.exists():
+            return {}
+
+        rows: dict[str, RateLimitRecord] = {}
+        for alias in aliases:
+            try:
+                latest = self._automation.latest_rate_limit_for_alias(alias)
+            except AutomationDatabaseError:
+                return {}
+            if latest is not None:
+                rows[alias] = latest
+        return rows
+
     def _build_alias_entries(
         self,
         aliases: list[str],
         metadata: dict[str, AliasRecord],
+        latest_rate_limits: dict[str, RateLimitRecord],
     ) -> list[AliasListEntry]:
-        return [
-            AliasListEntry(
-                alias=alias,
-                plan_type=_normalize_plan_type(
-                    None if alias not in metadata else metadata[alias].account_plan_type
+        entries: list[AliasListEntry] = []
+        for alias in aliases:
+            alias_metadata = metadata.get(alias)
+            rate_limit = latest_rate_limits.get(alias)
+            entries.append(
+                AliasListEntry(
+                    alias=alias,
+                    plan_type=_normalize_plan_type(
+                        None if alias_metadata is None else alias_metadata.account_plan_type
+                    ),
+                    five_hour_left_percent=_remaining_percent(
+                        None if rate_limit is None else rate_limit.primary_used_percent
+                    ),
+                    weekly_left_percent=_remaining_percent(
+                        None if rate_limit is None else rate_limit.secondary_used_percent
+                    ),
                 ),
             )
-            for alias in aliases
-        ]
+        return entries
 
     def _refresh_missing_alias_metadata(
         self,
@@ -144,6 +177,11 @@ class CodexSwitchManager:
                 )
             except AutomationDatabaseError:
                 continue
+            for snapshot in observation.rate_limits:
+                try:
+                    self._automation.upsert_rate_limit(snapshot)
+                except AutomationDatabaseError:
+                    continue
             refreshed = True
         return refreshed
 
@@ -532,3 +570,10 @@ def _normalize_plan_type(plan_type: str | None) -> str | None:
         return None
     normalized = plan_type.strip()
     return normalized or None
+
+
+def _remaining_percent(used_percent: float | None) -> int | None:
+    if used_percent is None:
+        return None
+    remaining = int(round(100 - used_percent))
+    return max(0, min(100, remaining))

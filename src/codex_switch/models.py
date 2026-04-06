@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
+from codex_switch.automation_models import RateLimitSnapshot
+
 
 class LoginMode(str, Enum):
     BROWSER = "browser"
@@ -77,6 +79,8 @@ class AutoSourceResult:
 class AliasListEntry:
     alias: str
     plan_type: str | None
+    five_hour_left_percent: int | None = None
+    weekly_left_percent: int | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -85,3 +89,4 @@ class AliasTelemetryObservation:
     account_plan_type: str | None
     account_fingerprint: str | None
     observed_at: str
+    rate_limits: tuple[RateLimitSnapshot, ...] = ()
