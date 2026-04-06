@@ -19,7 +19,9 @@ from codex_switch.models import (
     AliasListEntry,
     AutoSourceResult,
     AutoStatusResult,
+    AppConfig,
     DaemonStatusResult,
+    ListFormat,
     LoginMode,
     StatusResult,
 )
@@ -344,8 +346,8 @@ def test_format_alias_lines_marks_active_alias():
         ],
         "work",
     ) == [
-        "  personal",
-        "* work",
+        "  personal -- 5h left: ? -- weekly left: ?",
+        "* work -- 5h left: ? -- weekly left: ?",
     ]
 
 
@@ -361,8 +363,8 @@ def test_format_alias_lines_appends_plan_types_when_known():
         ],
         "beta",
     ) == [
-        "  backup",
-        "* beta -- plus",
+        "  backup -- 5h left: ? -- weekly left: ?",
+        "* beta -- plus -- 5h left: ? -- weekly left: ?",
     ]
 
 
@@ -370,7 +372,57 @@ def test_format_alias_lines_omits_blank_plan_types():
     assert format_alias_lines(
         [AliasListEntry(alias="beta", plan_type="")],
         "beta",
-    ) == ["* beta"]
+    ) == ["* beta -- 5h left: ? -- weekly left: ?"]
+
+
+def test_format_alias_lines_renders_labelled_usage_segments():
+    assert format_alias_lines(
+        [
+            AliasListEntry(
+                alias="backup",
+                plan_type=None,
+                five_hour_left_percent=None,
+                weekly_left_percent=None,
+            ),
+            AliasListEntry(
+                alias="beta",
+                plan_type="plus",
+                five_hour_left_percent=42,
+                weekly_left_percent=71,
+            ),
+        ],
+        "beta",
+        ListFormat.LABELLED,
+    ) == [
+        "  backup -- 5h left: ? -- weekly left: ?",
+        "* beta -- plus -- 5h left: 42% -- weekly left: 71%",
+    ]
+
+
+def test_format_alias_lines_renders_ascii_table():
+    assert format_alias_lines(
+        [
+            AliasListEntry(
+                alias="backup",
+                plan_type=None,
+                five_hour_left_percent=None,
+                weekly_left_percent=None,
+            ),
+            AliasListEntry(
+                alias="beta",
+                plan_type="plus",
+                five_hour_left_percent=42,
+                weekly_left_percent=71,
+            ),
+        ],
+        "beta",
+        ListFormat.TABLE,
+    ) == [
+        "active  alias   type  5h left  weekly left",
+        "------  ------  ----  -------  -----------",
+        "        backup        ?        ?",
+        "*       beta    plus  42%      71%",
+    ]
 
 
 def test_format_status_lines_marks_dirty_state():
@@ -537,12 +589,56 @@ def test_main_dispatches_list(monkeypatch, capsys):
             ], "work"
 
     monkeypatch.setattr("codex_switch.cli.build_default_manager", lambda: FakeManager())
+    monkeypatch.setattr(
+        "codex_switch.cli.load_app_config",
+        lambda _path: AppConfig(list_format=ListFormat.LABELLED),
+    )
+    monkeypatch.setattr(
+        "codex_switch.cli.resolve_paths",
+        lambda: SimpleNamespace(config_file=object()),
+    )
 
     result = main(["list"])
 
     captured = capsys.readouterr()
     assert result == 0
-    assert captured.out.splitlines() == ["  personal", "* work -- pro"]
+    assert captured.out.splitlines() == [
+        "  personal -- 5h left: ? -- weekly left: ?",
+        "* work -- pro -- 5h left: ? -- weekly left: ?",
+    ]
+
+
+def test_main_list_uses_configured_table_format(monkeypatch, capsys):
+    class FakeManager:
+        def list_aliases(self):
+            return (
+                [
+                    AliasListEntry(
+                        alias="beta",
+                        plan_type="plus",
+                        five_hour_left_percent=42,
+                        weekly_left_percent=71,
+                    )
+                ],
+                "beta",
+            )
+
+    monkeypatch.setattr("codex_switch.cli.build_default_manager", lambda: FakeManager())
+    monkeypatch.setattr(
+        "codex_switch.cli.load_app_config",
+        lambda _path: AppConfig(list_format=ListFormat.TABLE),
+    )
+    monkeypatch.setattr(
+        "codex_switch.cli.resolve_paths",
+        lambda: SimpleNamespace(config_file=object()),
+    )
+
+    assert main(["list"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "active  alias  type  5h left  weekly left",
+        "------  -----  ----  -------  -----------",
+        "*       beta   plus  42%      71%",
+    ]
 
 
 def test_main_dispatches_remove(monkeypatch, capsys):

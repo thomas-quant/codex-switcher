@@ -5,6 +5,7 @@ from collections.abc import Sequence
 
 from codex_switch.automation_db import SwitchEventRecord
 from codex_switch.accounts import AccountStore
+from codex_switch.config import load_app_config
 from codex_switch.errors import CodexSwitchError
 from codex_switch.manager import CodexSwitchManager
 from codex_switch.models import (
@@ -13,6 +14,7 @@ from codex_switch.models import (
     AutoSourceResult,
     AutoStatusResult,
     DaemonStatusResult,
+    ListFormat,
     LoginMode,
     StatusResult,
 )
@@ -105,16 +107,62 @@ def build_default_manager() -> CodexSwitchManager:
     )
 
 
-def format_alias_lines(entries: list[AliasListEntry], active_alias: str | None) -> list[str]:
+def format_alias_lines(
+    entries: list[AliasListEntry],
+    active_alias: str | None,
+    list_format: ListFormat = ListFormat.LABELLED,
+) -> list[str]:
     if not entries:
         return ["No aliases configured."]
+    if list_format is ListFormat.TABLE:
+        return format_alias_table_lines(entries, active_alias)
+    return format_alias_labelled_lines(entries, active_alias)
+
+
+def format_alias_labelled_lines(entries: list[AliasListEntry], active_alias: str | None) -> list[str]:
     lines: list[str] = []
     for entry in entries:
-        plan_type = entry.plan_type.strip() if entry.plan_type is not None else None
-        label = entry.alias if not plan_type else f"{entry.alias} -- {plan_type}"
         prefix = "* " if entry.alias == active_alias else "  "
-        lines.append(f"{prefix}{label}")
+        plan_type = entry.plan_type.strip() if entry.plan_type is not None else None
+        segments = [entry.alias]
+        if plan_type:
+            segments.append(plan_type)
+        segments.append(f"5h left: {_format_percent(entry.five_hour_left_percent)}")
+        segments.append(f"weekly left: {_format_percent(entry.weekly_left_percent)}")
+        lines.append(f"{prefix}{' -- '.join(segments)}")
     return lines
+
+
+def format_alias_table_lines(entries: list[AliasListEntry], active_alias: str | None) -> list[str]:
+    rows = [
+        [
+            "*" if entry.alias == active_alias else "",
+            entry.alias,
+            "" if entry.plan_type is None else entry.plan_type.strip(),
+            _format_percent(entry.five_hour_left_percent),
+            _format_percent(entry.weekly_left_percent),
+        ]
+        for entry in entries
+    ]
+    headers = ["active", "alias", "type", "5h left", "weekly left"]
+    widths = [
+        max(len(headers[index]), *(len(row[index]) for row in rows))
+        for index in range(len(headers))
+    ]
+
+    def render(row: list[str]) -> str:
+        leading = [cell.ljust(widths[index]) for index, cell in enumerate(row[:-1])]
+        return "  ".join([*leading, row[-1]])
+
+    return [
+        render(headers),
+        render(["-" * width for width in widths]),
+        *(render(row) for row in rows),
+    ]
+
+
+def _format_percent(value: int | None) -> str:
+    return "?" if value is None else f"{value}%"
 
 
 def format_status_lines(status: StatusResult) -> list[str]:
@@ -224,8 +272,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             manager.use(args.alias)
             print(f"active alias: {args.alias}")
         elif args.command == "list":
+            config = load_app_config(resolve_paths().config_file)
             aliases, active_alias = manager.list_aliases()
-            print(*format_alias_lines(aliases, active_alias), sep="\n")
+            print(*format_alias_lines(aliases, active_alias, config.list_format), sep="\n")
         elif args.command == "remove":
             manager.remove(args.alias)
             print(f"removed alias: {args.alias}")
