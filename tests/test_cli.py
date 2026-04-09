@@ -79,6 +79,15 @@ def test_build_parser_add_accepts_device_auth_flag():
     assert namespace.device_auth is True
 
 
+def test_build_parser_list_accepts_refresh_flag():
+    parser = build_parser()
+
+    namespace = parser.parse_args(["list", "--refresh"])
+
+    assert namespace.command == "list"
+    assert namespace.refresh is True
+
+
 def test_build_default_manager_threads_login_mode_through_runner(monkeypatch):
     captured: dict[str, object] = {}
 
@@ -655,8 +664,11 @@ def test_main_dispatches_use(monkeypatch, capsys):
 
 
 def test_main_dispatches_list(monkeypatch, capsys):
+    refresh_calls: list[bool] = []
+
     class FakeManager:
-        def list_aliases(self) -> tuple[list[AliasListEntry], str | None]:
+        def list_aliases(self, *, refresh: bool = True) -> tuple[list[AliasListEntry], str | None]:
+            refresh_calls.append(refresh)
             return [
                 AliasListEntry(alias="personal", plan_type=None),
                 AliasListEntry(alias="work", plan_type="pro"),
@@ -676,15 +688,44 @@ def test_main_dispatches_list(monkeypatch, capsys):
 
     captured = capsys.readouterr()
     assert result == 0
+    assert refresh_calls == [False]
     assert captured.out.splitlines() == [
         "  personal -- 5h left: ? -- weekly left: ?",
         "* work -- pro -- 5h left: ? -- weekly left: ?",
     ]
 
 
+def test_main_dispatches_list_refresh(monkeypatch, capsys):
+    refresh_calls: list[bool] = []
+
+    class FakeManager:
+        def list_aliases(self, *, refresh: bool = True) -> tuple[list[AliasListEntry], str | None]:
+            refresh_calls.append(refresh)
+            return [AliasListEntry(alias="work", plan_type="pro")], "work"
+
+    monkeypatch.setattr("codex_switch.cli.build_default_manager", lambda: FakeManager())
+    monkeypatch.setattr(
+        "codex_switch.cli.load_app_config",
+        lambda _path: AppConfig(list_format=ListFormat.LABELLED),
+    )
+    monkeypatch.setattr(
+        "codex_switch.cli.resolve_paths",
+        lambda: SimpleNamespace(config_file=object()),
+    )
+
+    result = main(["list", "--refresh"])
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert refresh_calls == [True]
+    assert captured.out.splitlines() == [
+        "* work -- pro -- 5h left: ? -- weekly left: ?",
+    ]
+
+
 def test_main_list_uses_configured_table_format(monkeypatch, capsys):
     class FakeManager:
-        def list_aliases(self):
+        def list_aliases(self, *, refresh: bool = True):
             return (
                 [
                     AliasListEntry(

@@ -32,9 +32,11 @@ pip install -e '.[dev]'
 
 Captures a fresh `codex login` session into a named snapshot. The existing active login is restored after capture. Use `--device-auth` when you need the Codex device-code flow instead of the default browser login.
 
-### `codex-switch list`
+### `codex-switch list [--refresh]`
 
-Lists configured aliases. The active alias is marked with `*`. `list` shows the cached or freshly probed account plan type plus remaining 5-hour and weekly usage when telemetry is available. Missing usage values render as `?`.
+Lists configured aliases. The active alias is marked with `*`. `list` shows cached account plan type plus remaining 5-hour and weekly usage when telemetry is available. Missing usage values render as `?`.
+
+Pass `--refresh` to re-probe aliases whose telemetry is missing or older than the freshness window before printing the list.
 
 Display mode is controlled by `~/.codex-switch/config.json`:
 

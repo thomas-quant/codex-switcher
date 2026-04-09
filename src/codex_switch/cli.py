@@ -38,6 +38,8 @@ def build_parser() -> argparse.ArgumentParser:
             child.add_argument("alias")
         if name == "add":
             child.add_argument("--device-auth", action="store_true")
+        if name == "list":
+            child.add_argument("--refresh", action="store_true")
 
     daemon_parser = subparsers.add_parser("daemon")
     daemon_subparsers = daemon_parser.add_subparsers(dest="daemon_command", required=True)
@@ -317,7 +319,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"active alias: {args.alias}")
         elif args.command == "list":
             config = load_app_config(resolve_paths().config_file)
-            aliases, active_alias = manager.list_aliases()
+            aliases, active_alias = manager.list_aliases(refresh=args.refresh)
             print(*format_alias_lines(aliases, active_alias, config.list_format), sep="\n")
         elif args.command == "remove":
             manager.remove(args.alias)

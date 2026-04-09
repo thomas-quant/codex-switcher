@@ -114,6 +114,40 @@ def test_list_aliases_does_not_create_automation_db_for_cold_cache(tmp_path):
     assert not store._db_file.exists()
 
 
+def test_list_aliases_uses_cache_only_when_refresh_is_disabled(tmp_path):
+    probe_calls: list[str] = []
+
+    def alias_metadata_probe(alias: str) -> AliasTelemetryObservation | None:
+        probe_calls.append(alias)
+        return AliasTelemetryObservation(
+            account_email=f"{alias}@example.com",
+            account_plan_type="plus",
+            account_fingerprint=f"fp-{alias}",
+            observed_at="2026-04-05T00:10:00Z",
+        )
+
+    manager, _paths, accounts, state, store, _guard = make_manager(
+        tmp_path,
+        alias_metadata_probe=alias_metadata_probe,
+    )
+    accounts.write_snapshot_from_bytes("beta", b"{}")
+    store.reconcile_aliases(["beta"])
+    state.save(AppState(active_alias="beta", updated_at="2026-04-05T00:00:00Z"))
+
+    entries, active_alias = manager.list_aliases(refresh=False)
+
+    assert entries == [
+        AliasListEntry(
+            alias="beta",
+            plan_type=None,
+            five_hour_left_percent=None,
+            weekly_left_percent=None,
+        )
+    ]
+    assert active_alias == "beta"
+    assert probe_calls == []
+
+
 def test_list_aliases_persists_probe_results_for_cold_cache(tmp_path):
     def alias_metadata_probe(alias: str) -> AliasTelemetryObservation | None:
         return AliasTelemetryObservation(

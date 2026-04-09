@@ -71,7 +71,7 @@ class CodexSwitchManager:
         self._resume_runner = resume_runner
         self._alias_metadata_probe = alias_metadata_probe
 
-    def list_aliases(self) -> tuple[list[AliasListEntry], str | None]:
+    def list_aliases(self, *, refresh: bool = True) -> tuple[list[AliasListEntry], str | None]:
         current = self._state.load()
         aliases = self._accounts.list_aliases()
         metadata = self._metadata_by_alias()
@@ -85,7 +85,7 @@ class CodexSwitchManager:
             or entry.five_hour_left_percent is None
             or entry.weekly_left_percent is None
         ]
-        if unresolved_aliases and self._alias_metadata_probe is not None:
+        if refresh and unresolved_aliases and self._alias_metadata_probe is not None:
             refreshed = self._refresh_missing_alias_metadata(
                 unresolved_aliases=unresolved_aliases,
                 previous_state=current,
