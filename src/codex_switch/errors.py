@@ -29,6 +29,10 @@ class ActiveAliasRemovalError(CodexSwitchError):
     pass
 
 
+class UnsafeAliasRemovalError(CodexSwitchError):
+    pass
+
+
 class CodexProcessRunningError(CodexSwitchError):
     pass
 

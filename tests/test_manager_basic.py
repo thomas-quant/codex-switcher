@@ -3,7 +3,11 @@ from __future__ import annotations
 import pytest
 
 from codex_switch.accounts import AccountStore
-from codex_switch.errors import ActiveAliasRemovalError, SnapshotNotFoundError
+from codex_switch.errors import (
+    ActiveAliasRemovalError,
+    SnapshotNotFoundError,
+    UnsafeAliasRemovalError,
+)
 from codex_switch.manager import CodexSwitchManager
 from codex_switch.models import AliasListEntry, AppState, StatusResult
 from codex_switch.paths import resolve_paths
@@ -89,8 +93,63 @@ def test_remove_rejects_active_alias(tmp_path):
     with pytest.raises(ActiveAliasRemovalError, match="Cannot remove active alias 'work'"):
         manager.remove("work")
 
-    assert guard.calls == 1
+    assert guard.calls == 0
     assert accounts.exists("work")
+
+
+def test_remove_allows_inactive_alias_when_codex_is_running_and_identity_differs(tmp_path, monkeypatch):
+    manager, paths, accounts, state, guard = make_manager(tmp_path)
+    accounts.write_snapshot_from_bytes("work", b'{"token":"snapshot-work"}')
+    accounts.write_snapshot_from_bytes("backup", b'{"token":"snapshot-backup"}')
+    state.save(AppState(active_alias="work", updated_at="2026-03-31T12:00:00Z"))
+    paths.live_auth_file.parent.mkdir(parents=True, exist_ok=True)
+    paths.live_auth_file.write_bytes(b'{"token":"live-work"}')
+
+    monkeypatch.setattr(manager, "_is_codex_running", lambda: True, raising=False)
+    monkeypatch.setattr(
+        manager,
+        "_identity_from_auth_bytes",
+        lambda auth_bytes: ("fp-work", None) if auth_bytes == b'{"token":"live-work"}' else ("fp-backup", None),
+        raising=False,
+    )
+
+    manager.remove("backup")
+
+    assert not accounts.exists("backup")
+    assert guard.calls == 0
+
+
+def test_remove_rejects_when_codex_is_running_and_snapshot_matches_live_auth(tmp_path, monkeypatch):
+    manager, paths, accounts, state, _guard = make_manager(tmp_path)
+    accounts.write_snapshot_from_bytes("work", b'{"token":"snapshot-work"}')
+    accounts.write_snapshot_from_bytes("backup", b'{"token":"same-as-live"}')
+    state.save(AppState(active_alias="work", updated_at="2026-03-31T12:00:00Z"))
+    paths.live_auth_file.parent.mkdir(parents=True, exist_ok=True)
+    paths.live_auth_file.write_bytes(b'{"token":"same-as-live"}')
+
+    monkeypatch.setattr(manager, "_is_codex_running", lambda: True, raising=False)
+
+    with pytest.raises(UnsafeAliasRemovalError, match="matches the live Codex auth"):
+        manager.remove("backup")
+
+    assert accounts.exists("backup")
+
+
+def test_remove_rejects_when_codex_is_running_and_live_identity_is_unknown(tmp_path, monkeypatch):
+    manager, paths, accounts, state, _guard = make_manager(tmp_path)
+    accounts.write_snapshot_from_bytes("work", b'{"token":"snapshot-work"}')
+    accounts.write_snapshot_from_bytes("backup", b'{"token":"snapshot-backup"}')
+    state.save(AppState(active_alias="work", updated_at="2026-03-31T12:00:00Z"))
+    paths.live_auth_file.parent.mkdir(parents=True, exist_ok=True)
+    paths.live_auth_file.write_bytes(b'{"token":"live-work"}')
+
+    monkeypatch.setattr(manager, "_is_codex_running", lambda: True, raising=False)
+    monkeypatch.setattr(manager, "_identity_from_auth_bytes", lambda _auth_bytes: None, raising=False)
+
+    with pytest.raises(UnsafeAliasRemovalError, match="Could not identify the live Codex account"):
+        manager.remove("backup")
+
+    assert accounts.exists("backup")
 
 
 def test_list_aliases_returns_sorted_names_and_active_alias(tmp_path):

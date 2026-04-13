@@ -21,6 +21,7 @@ from codex_switch.errors import (
     AutomationHandoffError,
     CodexProcessRunningError,
     LoginCaptureError,
+    UnsafeAliasRemovalError,
 )
 from codex_switch.fs import atomic_write_bytes, ensure_private_dir, file_digest
 from codex_switch.isolated_codex import isolated_codex_env
@@ -49,6 +50,10 @@ class LoginRunner(Protocol):
     ) -> None: ...
 
 
+class AuthIdentityProbe(Protocol):
+    def __call__(self, auth_bytes: bytes) -> tuple[str | None, str | None] | None: ...
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -70,6 +75,8 @@ class CodexSwitchManager:
         soft_switch_threshold: float = 95.0,
         resume_runner: Callable[[str], None] = run_codex_resume,
         alias_metadata_probe: Callable[[str], AliasTelemetryObservation | None] | None = None,
+        is_codex_running: Callable[[], bool] | None = None,
+        identity_from_auth_bytes: AuthIdentityProbe | None = None,
     ) -> None:
         self._paths = paths
         self._accounts = accounts
@@ -83,6 +90,8 @@ class CodexSwitchManager:
         self._soft_switch_threshold = soft_switch_threshold
         self._resume_runner = resume_runner
         self._alias_metadata_probe = alias_metadata_probe
+        self._is_codex_running = (lambda: False) if is_codex_running is None else is_codex_running
+        self._identity_from_auth_bytes = identity_from_auth_bytes
 
     def list_aliases(self, *, refresh: bool = True) -> tuple[list[AliasListEntry], str | None]:
         current = self._state.load()
@@ -561,11 +570,57 @@ class CodexSwitchManager:
         self._state.save(replace(current, active_alias=alias, updated_at=utc_now()))
 
     def remove(self, alias: str) -> None:
-        self._ensure_safe_to_mutate()
         current = self._state.load()
         if current.active_alias == alias:
             raise ActiveAliasRemovalError(f"Cannot remove active alias '{alias}'")
+        if self._is_codex_running():
+            self._assert_alias_is_not_live_account(alias)
         self._accounts.delete(alias)
+
+    def _assert_alias_is_not_live_account(self, alias: str) -> None:
+        if not self._paths.live_auth_file.exists():
+            raise UnsafeAliasRemovalError(
+                "Could not identify the live Codex account while Codex is running."
+            )
+
+        snapshot_digest = file_digest(self._accounts.snapshot_path(alias))
+        live_digest = file_digest(self._paths.live_auth_file)
+        if snapshot_digest == live_digest:
+            raise UnsafeAliasRemovalError(
+                f"Cannot remove alias '{alias}' because it matches the live Codex auth."
+            )
+
+        if self._identity_from_auth_bytes is None:
+            raise UnsafeAliasRemovalError(
+                "Could not identify the live Codex account while Codex is running."
+            )
+
+        live_identity = self._identity_from_auth_bytes(self._paths.live_auth_file.read_bytes())
+        alias_identity = self._identity_from_auth_bytes(self._accounts.read_snapshot(alias))
+        if live_identity is None or alias_identity is None:
+            raise UnsafeAliasRemovalError(
+                "Could not identify the live Codex account while Codex is running."
+            )
+
+        live_fingerprint, live_email = live_identity
+        alias_fingerprint, alias_email = alias_identity
+        if live_fingerprint is not None and alias_fingerprint is not None:
+            if live_fingerprint == alias_fingerprint:
+                raise UnsafeAliasRemovalError(
+                    f"Cannot remove alias '{alias}' because it is the live Codex account."
+                )
+            return
+
+        if live_email is not None and alias_email is not None:
+            if live_email == alias_email:
+                raise UnsafeAliasRemovalError(
+                    f"Cannot remove alias '{alias}' because it is the live Codex account."
+                )
+            return
+
+        raise UnsafeAliasRemovalError(
+            "Could not identify the live Codex account while Codex is running."
+        )
 
 
 def _rate_limit_record_to_snapshot(record: RateLimitRecord) -> RateLimitSnapshot:
