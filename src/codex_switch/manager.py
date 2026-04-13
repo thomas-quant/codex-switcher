@@ -18,6 +18,7 @@ from codex_switch.errors import (
     ActiveAliasRemovalError,
     AutomationDatabaseError,
     AutomationHandoffError,
+    CodexProcessRunningError,
     LoginCaptureError,
 )
 from codex_switch.fs import atomic_write_bytes, ensure_private_dir, file_digest
@@ -512,7 +513,12 @@ class CodexSwitchManager:
                 raise
             return
 
-        self._ensure_safe_to_mutate()
+        try:
+            self._ensure_safe_to_mutate()
+        except CodexProcessRunningError as exc:
+            raise CodexProcessRunningError(
+                f"{exc} Use 'codex-switch add {alias} --isolated' to capture a new alias without touching live auth."
+            ) from exc
         self._accounts.assert_missing(alias)
         previous_state = self._state.load()
         backup_path: Path | None = None

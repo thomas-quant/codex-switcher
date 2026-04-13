@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from codex_switch.accounts import AccountStore
-from codex_switch.errors import AliasAlreadyExistsError, LoginCaptureError
+from codex_switch.errors import AliasAlreadyExistsError, CodexProcessRunningError, LoginCaptureError
 from codex_switch.manager import CodexSwitchManager
 from codex_switch.models import AppState, LoginMode
 from codex_switch.paths import resolve_paths
@@ -291,3 +291,24 @@ def test_add_isolated_passes_device_auth_mode(tmp_path):
     assert guard.calls == 0
     assert login_modes == [(LoginMode.DEVICE_AUTH, True)]
     assert accounts.read_snapshot("personal") == b'{"token":"device-auth"}'
+
+
+def test_add_process_running_error_suggests_isolated(tmp_path):
+    manager, _paths, _accounts, state, _guard = make_manager(
+        tmp_path,
+        lambda _login_mode, *, env=None: None,
+    )
+    state.save(AppState(active_alias=None, updated_at="2026-03-31T12:00:00Z"))
+
+    def running_guard() -> None:
+        raise CodexProcessRunningError(
+            "A codex process is running. Exit Codex before mutating account state."
+        )
+
+    manager._ensure_safe_to_mutate = running_guard
+
+    with pytest.raises(
+        CodexProcessRunningError,
+        match=r"codex-switch add personal --isolated",
+    ):
+        manager.add("personal")
