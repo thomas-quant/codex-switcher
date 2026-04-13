@@ -2,17 +2,13 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Sequence
-from contextlib import contextmanager
-import os
-from pathlib import Path
-import tempfile
 
 from codex_switch.automation_db import SwitchEventRecord
 from codex_switch.accounts import AccountStore
 from codex_switch.automation_rpc import CodexRpcClient
 from codex_switch.config import load_app_config
 from codex_switch.errors import CodexSwitchError
-from codex_switch.fs import atomic_write_bytes
+from codex_switch.isolated_codex import isolated_codex_env
 from codex_switch.manager import CodexSwitchManager
 from codex_switch.models import (
     AliasListEntry,
@@ -38,6 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
             child.add_argument("alias")
         if name == "add":
             child.add_argument("--device-auth", action="store_true")
+            child.add_argument("--isolated", action="store_true")
         if name == "list":
             child.add_argument("--refresh", action="store_true")
 
@@ -70,7 +67,7 @@ def build_default_manager() -> CodexSwitchManager:
 
     def probe_alias_metadata(alias: str):
         auth_bytes = _load_probe_auth_bytes(alias=alias, accounts=accounts, paths=paths, state=state)
-        with _isolated_codex_env(auth_bytes) as env:
+        with isolated_codex_env(auth_bytes) as env:
             rpc_source = AppServerRpcSource(
                 client_factory=lambda: CodexRpcClient.launch_default(env=env)
             )
@@ -134,23 +131,6 @@ def _load_probe_auth_bytes(
     if alias == current.active_alias and paths.live_auth_file.exists():
         return paths.live_auth_file.read_bytes()
     return accounts.read_snapshot(alias)
-
-
-@contextmanager
-def _isolated_codex_env(auth_bytes: bytes):
-    with tempfile.TemporaryDirectory(prefix="codex-switch-probe-") as raw_home:
-        home = Path(raw_home)
-        codex_root = home / ".codex"
-        atomic_write_bytes(
-            codex_root / "auth.json",
-            auth_bytes,
-            mode=0o600,
-            root=home,
-        )
-        env = os.environ.copy()
-        env["HOME"] = str(home)
-        env["CODEX_HOME"] = str(codex_root)
-        yield env
 
 
 def format_alias_lines(
@@ -317,10 +297,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         if args.command == "add":
-            if args.device_auth:
-                manager.add(args.alias, login_mode=LoginMode.DEVICE_AUTH)
-            else:
-                manager.add(args.alias)
+            login_mode = LoginMode.DEVICE_AUTH if args.device_auth else LoginMode.BROWSER
+            manager.add(args.alias, login_mode=login_mode, isolated=args.isolated)
             print(f"added alias: {args.alias}")
         elif args.command == "use":
             manager.use(args.alias)

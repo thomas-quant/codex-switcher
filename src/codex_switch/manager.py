@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 import os
 import subprocess
 import tempfile
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Protocol
 
 from codex_switch.accounts import AccountStore
 from codex_switch.automation_db import AliasRecord, AutomationStore, RateLimitRecord, SwitchEventRecord
@@ -20,6 +21,7 @@ from codex_switch.errors import (
     LoginCaptureError,
 )
 from codex_switch.fs import atomic_write_bytes, ensure_private_dir, file_digest
+from codex_switch.isolated_codex import isolated_codex_env
 from codex_switch.models import (
     AliasListEntry,
     AliasTelemetryObservation,
@@ -34,6 +36,15 @@ from codex_switch.models import (
 from codex_switch.state import StateStore
 
 _FRESH_TELEMETRY_SECONDS = 15 * 60
+
+
+class LoginRunner(Protocol):
+    def __call__(
+        self,
+        mode: LoginMode,
+        *,
+        env: Mapping[str, str] | None = None,
+    ) -> None: ...
 
 
 def utc_now() -> str:
@@ -51,7 +62,7 @@ class CodexSwitchManager:
         accounts: AccountStore,
         state: StateStore,
         ensure_safe_to_mutate: Callable[[], None],
-        login_runner: Callable[[LoginMode], None],
+        login_runner: LoginRunner,
         automation: AutomationStore | None = None,
         daemon_controller: DaemonController | None = None,
         soft_switch_threshold: float = 95.0,
@@ -478,7 +489,29 @@ class CodexSwitchManager:
         if clear_unmanaged_live_auth and self._paths.live_auth_file.exists():
             self._paths.live_auth_file.unlink()
 
-    def add(self, alias: str, *, login_mode: LoginMode = LoginMode.BROWSER) -> None:
+    def add(
+        self,
+        alias: str,
+        *,
+        login_mode: LoginMode = LoginMode.BROWSER,
+        isolated: bool = False,
+    ) -> None:
+        if isolated:
+            self._accounts.assert_missing(alias)
+            auth_file: Path | None = None
+            try:
+                with isolated_codex_env() as env:
+                    self._login_runner(login_mode, env=env)
+                    auth_file = Path(env["CODEX_HOME"]) / "auth.json"
+                    if not auth_file.exists():
+                        raise LoginCaptureError("codex login did not leave ~/.codex/auth.json behind")
+                    self._accounts.write_snapshot_from_file(alias, auth_file)
+            except Exception:
+                if self._accounts.exists(alias):
+                    self._accounts.delete(alias)
+                raise
+            return
+
         self._ensure_safe_to_mutate()
         self._accounts.assert_missing(alias)
         previous_state = self._state.load()

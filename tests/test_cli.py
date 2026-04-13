@@ -79,6 +79,17 @@ def test_build_parser_add_accepts_device_auth_flag():
     assert namespace.device_auth is True
 
 
+def test_build_parser_add_accepts_isolated_flag():
+    parser = build_parser()
+
+    namespace = parser.parse_args(["add", "work", "--isolated", "--device-auth"])
+
+    assert namespace.command == "add"
+    assert namespace.alias == "work"
+    assert namespace.isolated is True
+    assert namespace.device_auth is True
+
+
 def test_build_parser_list_accepts_refresh_flag():
     parser = build_parser()
 
@@ -643,6 +654,29 @@ def test_main_dispatches_add_device_auth(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert result == 0
     assert calls == [("add", "work", LoginMode.DEVICE_AUTH)]
+    assert captured.out == "added alias: work\n"
+
+
+def test_main_dispatches_add_isolated_device_auth(monkeypatch, capsys):
+    calls: list[tuple[str, str, LoginMode, bool]] = []
+
+    class FakeManager:
+        def add(
+            self,
+            alias: str,
+            login_mode: LoginMode = LoginMode.BROWSER,
+            *,
+            isolated: bool = False,
+        ) -> None:
+            calls.append(("add", alias, login_mode, isolated))
+
+    monkeypatch.setattr("codex_switch.cli.build_default_manager", lambda: FakeManager())
+
+    result = main(["add", "work", "--isolated", "--device-auth"])
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert calls == [("add", "work", LoginMode.DEVICE_AUTH, True)]
     assert captured.out == "added alias: work\n"
 
 
