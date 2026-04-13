@@ -11,7 +11,12 @@ from codex_switch.fs import atomic_write_bytes, ensure_private_dir
 
 @contextmanager
 def isolated_codex_env(auth_bytes: bytes | None = None) -> Iterator[dict[str, str]]:
-    with tempfile.TemporaryDirectory(prefix="codex-switch-isolated-") as raw_home:
+    isolated_root = Path.home() / ".codex-switch" / "isolated-homes"
+    ensure_private_dir(isolated_root)
+    with tempfile.TemporaryDirectory(
+        prefix="codex-switch-isolated-",
+        dir=isolated_root,
+    ) as raw_home:
         home = Path(raw_home)
         codex_root = home / ".codex"
         ensure_private_dir(codex_root, root=home)

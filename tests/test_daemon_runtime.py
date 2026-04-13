@@ -579,6 +579,66 @@ def test_app_server_rpc_source_polls_requests_and_notifications():
     assert result.token_usage[0].turn_id == "turn-1"
 
 
+def test_app_server_rpc_source_keeps_account_identity_when_rate_limits_request_errors():
+    class FakeClient:
+        def __init__(self) -> None:
+            self.requests: list[tuple[int, str, object]] = []
+
+        def send_request(self, request_id: int, method: str, params):
+            self.requests.append((request_id, method, params))
+            if method == "initialize":
+                return type("Msg", (), {"payload": {"jsonrpc": "2.0", "id": request_id, "result": {"ok": True}}})()
+            if method == "account/read":
+                return type(
+                    "Msg",
+                    (),
+                    {
+                        "payload": {
+                            "jsonrpc": "2.0",
+                            "id": request_id,
+                            "result": {
+                                "account": {
+                                    "email": "work@example.com",
+                                    "planType": "team",
+                                    "fingerprint": "fp-work",
+                                }
+                            },
+                        }
+                    },
+                )()
+            if method == "account/rateLimits/read":
+                return type(
+                    "Msg",
+                    (),
+                    {
+                        "payload": {
+                            "jsonrpc": "2.0",
+                            "id": request_id,
+                            "error": {
+                                "code": -32603,
+                                "message": "invalid_workspace_selected",
+                            },
+                        }
+                    },
+                )()
+            raise AssertionError(f"unexpected method {method}")
+
+        def drain_messages_nonblocking(self):
+            return []
+
+    source = AppServerRpcSource(client_factory=lambda: FakeClient())
+
+    result = source.poll(active_alias="work")
+
+    assert result.account_identity is not None
+    assert result.account_identity.email == "work@example.com"
+    assert result.account_identity.plan_type == "team"
+    assert result.rate_limits == []
+    assert result.thread_runtime is None
+    assert result.token_usage == []
+    assert result.hard_limit_exceeded is False
+
+
 def test_codex_cli_pty_source_probes_status_output(monkeypatch):
     class Completed:
         def __init__(self) -> None:

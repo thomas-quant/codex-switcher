@@ -140,17 +140,25 @@ class AppServerRpcSource:
                 except ValueError:
                     continue
 
-        return RpcPollResult(
-            account_identity=parse_account_read_result(
+        account_identity = None
+        if "error" not in account_response.payload:
+            account_identity = parse_account_read_result(
                 account_response.payload,
                 observed_at=observed_at,
-            ),
-            rate_limits=parse_rate_limits_result(
+            )
+
+        rate_limits: list[RateLimitSnapshot] = []
+        if "error" not in rate_limit_response.payload:
+            rate_limits = parse_rate_limits_result(
                 alias=active_alias,
                 response=rate_limit_response.payload,
                 observed_via=UsageSource.RPC,
                 observed_at=observed_at,
-            ),
+            )
+
+        return RpcPollResult(
+            account_identity=account_identity,
+            rate_limits=rate_limits,
             thread_runtime=thread_runtime,
             token_usage=token_usage,
             hard_limit_exceeded=hard_limit_exceeded,
