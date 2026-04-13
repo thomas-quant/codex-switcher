@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import threading
 
 import pytest
 
@@ -442,6 +443,52 @@ def test_list_aliases_ignores_probe_failures_and_keeps_plain_alias(tmp_path):
         )
     ]
     assert active_alias == "backup"
+
+
+def test_list_aliases_refreshes_unresolved_aliases_in_parallel(tmp_path):
+    started: list[str] = []
+    release = threading.Event()
+
+    def alias_metadata_probe(alias: str) -> AliasTelemetryObservation | None:
+        started.append(alias)
+        if len(started) == 2:
+            release.set()
+        if not release.wait(timeout=0.2):
+            return None
+        return AliasTelemetryObservation(
+            account_email=f"{alias}@example.com",
+            account_plan_type="plus",
+            account_fingerprint=f"fp-{alias}",
+            observed_at="2026-04-13T10:00:00Z",
+        )
+
+    manager, _paths, accounts, state, store, _guard = make_manager(
+        tmp_path,
+        alias_metadata_probe=alias_metadata_probe,
+    )
+    accounts.write_snapshot_from_bytes("alpha", b"{}")
+    accounts.write_snapshot_from_bytes("beta", b"{}")
+    store.reconcile_aliases(["alpha", "beta"])
+    state.save(AppState(active_alias=None, updated_at="2026-04-13T09:00:00Z"))
+
+    entries, active_alias = manager.list_aliases()
+
+    assert entries == [
+        AliasListEntry(
+            alias="alpha",
+            plan_type="plus",
+            five_hour_left_percent=None,
+            weekly_left_percent=None,
+        ),
+        AliasListEntry(
+            alias="beta",
+            plan_type="plus",
+            five_hour_left_percent=None,
+            weekly_left_percent=None,
+        ),
+    ]
+    assert active_alias is None
+    assert sorted(started) == ["alpha", "beta"]
 
 
 def test_list_aliases_refreshes_stale_usage_for_active_alias(tmp_path):
@@ -1109,3 +1156,35 @@ def test_list_aliases_refreshes_missing_usage_for_inactive_alias_and_restores_au
     assert active_alias == "work"
     assert guard.calls == 0
     assert paths.live_auth_file.read_bytes() == b'{"token":"live-work"}'
+
+
+def test_list_aliases_inactive_refresh_no_longer_mutates_live_auth(tmp_path, monkeypatch):
+    manager, _paths, accounts, state, store, _guard = make_manager(
+        tmp_path,
+        alias_metadata_probe=lambda _alias: None,
+    )
+    accounts.write_snapshot_from_bytes("backup", b"{}")
+    store.reconcile_aliases(["backup"])
+    state.save(AppState(active_alias=None, updated_at="2026-04-13T09:00:00Z"))
+
+    backup_calls = 0
+
+    def fail_backup():
+        nonlocal backup_calls
+        backup_calls += 1
+        raise AssertionError("list refresh should not back up live auth")
+
+    monkeypatch.setattr(manager, "_backup_live_auth", fail_backup)
+
+    entries, active_alias = manager.list_aliases()
+
+    assert entries == [
+        AliasListEntry(
+            alias="backup",
+            plan_type=None,
+            five_hour_left_percent=None,
+            weekly_left_percent=None,
+        )
+    ]
+    assert active_alias is None
+    assert backup_calls == 0

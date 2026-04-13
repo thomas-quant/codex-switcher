@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 import subprocess
 import tempfile
@@ -167,9 +168,29 @@ class CodexSwitchManager:
         previous_state: AppState,
         metadata: dict[str, AliasRecord],
     ) -> bool:
+        if not unresolved_aliases:
+            return False
+
+        observations: dict[str, AliasTelemetryObservation] = {}
+        max_workers = min(4, len(unresolved_aliases))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(
+                    self._probe_alias_metadata,
+                    alias=alias,
+                    previous_state=previous_state,
+                ): alias
+                for alias in unresolved_aliases
+            }
+            for future in as_completed(futures):
+                alias = futures[future]
+                observation = future.result()
+                if observation is not None:
+                    observations[alias] = observation
+
         refreshed = False
         for alias in unresolved_aliases:
-            observation = self._probe_alias_metadata(alias=alias, previous_state=previous_state)
+            observation = observations.get(alias)
             if observation is None:
                 continue
 
@@ -209,61 +230,14 @@ class CodexSwitchManager:
         alias: str,
         previous_state: AppState,
     ) -> AliasTelemetryObservation | None:
+        del previous_state
         if self._alias_metadata_probe is None:
             return None
 
         try:
-            observation = self._alias_metadata_probe(alias)
-        except Exception:
-            observation = None
-        if observation is not None or alias == previous_state.active_alias:
-            return observation
-
-        try:
-            self._ensure_safe_to_mutate()
+            return self._alias_metadata_probe(alias)
         except Exception:
             return None
-
-        backup_path: Path | None = None
-        clear_unmanaged_live_auth = False
-        observation: AliasTelemetryObservation | None = None
-        probe_error: Exception | None = None
-        try:
-            backup_path = self._backup_live_auth()
-            clear_unmanaged_live_auth = True
-            atomic_write_bytes(
-                self._paths.live_auth_file,
-                self._accounts.read_snapshot(alias),
-                mode=0o600,
-                root=self._paths.codex_root,
-            )
-            observation = self._alias_metadata_probe(alias)
-        except Exception as exc:
-            probe_error = exc
-
-        cleanup_errors: list[Exception] = []
-        try:
-            self._restore_previous_live_auth(
-                previous_state,
-                backup_path,
-                clear_unmanaged_live_auth,
-                prefer_live_backup=True,
-            )
-        except Exception as exc:
-            cleanup_errors.append(exc)
-        try:
-            self._state.save(previous_state)
-        except Exception as exc:
-            cleanup_errors.append(exc)
-
-        if len(cleanup_errors) == 1:
-            raise cleanup_errors[0]
-        if cleanup_errors:
-            raise ExceptionGroup("Multiple cleanup failures", cleanup_errors)
-
-        if probe_error is not None:
-            return None
-        return observation
 
     def status(self) -> StatusResult:
         current = self._state.load()
