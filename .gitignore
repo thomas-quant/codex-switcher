@@ -7,6 +7,9 @@ __pycache__/
 .codex/
 .codex-switch
 .codex-switch/
+AGENTS.md
+.agents/
+skills-lock.json
 *.pyc
 build/
 dist/

@@ -99,6 +99,15 @@ def test_build_parser_list_accepts_refresh_flag():
     assert namespace.refresh is True
 
 
+def test_build_parser_list_accepts_email_flag():
+    parser = build_parser()
+
+    namespace = parser.parse_args(["list", "--email"])
+
+    assert namespace.command == "list"
+    assert namespace.email is True
+
+
 def test_build_default_manager_threads_login_mode_through_runner(monkeypatch):
     captured: dict[str, object] = {}
 
@@ -579,6 +588,33 @@ def test_format_alias_lines_renders_labelled_usage_segments():
     ]
 
 
+def test_format_alias_lines_renders_labelled_email_segment_when_requested():
+    assert format_alias_lines(
+        [
+            AliasListEntry(
+                alias="beta",
+                plan_type="plus",
+                account_email="beta@example.com",
+                five_hour_left_percent=42,
+                weekly_left_percent=71,
+            ),
+            AliasListEntry(
+                alias="backup",
+                plan_type=None,
+                account_email=None,
+                five_hour_left_percent=None,
+                weekly_left_percent=None,
+            ),
+        ],
+        "beta",
+        ListFormat.LABELLED,
+        show_email=True,
+    ) == [
+        "* beta -- plus -- email: beta@example.com -- 5h left: 42% -- weekly left: 71%",
+        "  backup -- email: ? -- 5h left: ? -- weekly left: ?",
+    ]
+
+
 def test_format_alias_lines_renders_ascii_table():
     assert format_alias_lines(
         [
@@ -602,6 +638,35 @@ def test_format_alias_lines_renders_ascii_table():
         "------  ------  ----  -------  -----------",
         "        backup        ?        ?",
         "*       beta    plus  42%      71%",
+    ]
+
+
+def test_format_alias_lines_renders_ascii_table_with_email_column_when_requested():
+    assert format_alias_lines(
+        [
+            AliasListEntry(
+                alias="backup",
+                plan_type=None,
+                account_email=None,
+                five_hour_left_percent=None,
+                weekly_left_percent=None,
+            ),
+            AliasListEntry(
+                alias="beta",
+                plan_type="plus",
+                account_email="beta@example.com",
+                five_hour_left_percent=42,
+                weekly_left_percent=71,
+            ),
+        ],
+        "beta",
+        ListFormat.TABLE,
+        show_email=True,
+    ) == [
+        "active  alias   email             type  5h left  weekly left",
+        "------  ------  ----------------  ----  -------  -----------",
+        "        backup  ?                       ?        ?",
+        "*       beta    beta@example.com  plus  42%      71%",
     ]
 
 
@@ -799,8 +864,14 @@ def test_main_dispatches_list(monkeypatch, capsys):
     refresh_calls: list[bool] = []
 
     class FakeManager:
-        def list_aliases(self, *, refresh: bool = True) -> tuple[list[AliasListEntry], str | None]:
+        def list_aliases(
+            self,
+            *,
+            refresh: bool = True,
+            include_email: bool = False,
+        ) -> tuple[list[AliasListEntry], str | None]:
             refresh_calls.append(refresh)
+            assert include_email is False
             return [
                 AliasListEntry(alias="personal", plan_type=None),
                 AliasListEntry(alias="work", plan_type="pro"),
@@ -831,8 +902,14 @@ def test_main_dispatches_list_refresh(monkeypatch, capsys):
     refresh_calls: list[bool] = []
 
     class FakeManager:
-        def list_aliases(self, *, refresh: bool = True) -> tuple[list[AliasListEntry], str | None]:
+        def list_aliases(
+            self,
+            *,
+            refresh: bool = True,
+            include_email: bool = False,
+        ) -> tuple[list[AliasListEntry], str | None]:
             refresh_calls.append(refresh)
+            assert include_email is False
             return [AliasListEntry(alias="work", plan_type="pro")], "work"
 
     monkeypatch.setattr("codex_switch.cli.build_default_manager", lambda: FakeManager())
@@ -855,9 +932,50 @@ def test_main_dispatches_list_refresh(monkeypatch, capsys):
     ]
 
 
+def test_main_dispatches_list_email(monkeypatch, capsys):
+    refresh_calls: list[bool] = []
+
+    class FakeManager:
+        def list_aliases(
+            self,
+            *,
+            refresh: bool = True,
+            include_email: bool = False,
+        ) -> tuple[list[AliasListEntry], str | None]:
+            refresh_calls.append(refresh)
+            assert include_email is True
+            return [
+                AliasListEntry(
+                    alias="work",
+                    plan_type="pro",
+                    account_email="work@example.com",
+                )
+            ], "work"
+
+    monkeypatch.setattr("codex_switch.cli.build_default_manager", lambda: FakeManager())
+    monkeypatch.setattr(
+        "codex_switch.cli.load_app_config",
+        lambda _path: AppConfig(list_format=ListFormat.LABELLED),
+    )
+    monkeypatch.setattr(
+        "codex_switch.cli.resolve_paths",
+        lambda: SimpleNamespace(config_file=object()),
+    )
+
+    result = main(["list", "--email"])
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert refresh_calls == [False]
+    assert captured.out.splitlines() == [
+        "* work -- pro -- email: work@example.com -- 5h left: ? -- weekly left: ?",
+    ]
+
+
 def test_main_list_uses_configured_table_format(monkeypatch, capsys):
     class FakeManager:
-        def list_aliases(self, *, refresh: bool = True):
+        def list_aliases(self, *, refresh: bool = True, include_email: bool = False):
+            assert include_email is False
             return (
                 [
                     AliasListEntry(

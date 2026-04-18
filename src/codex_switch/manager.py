@@ -93,12 +93,22 @@ class CodexSwitchManager:
         self._is_codex_running = (lambda: False) if is_codex_running is None else is_codex_running
         self._identity_from_auth_bytes = identity_from_auth_bytes
 
-    def list_aliases(self, *, refresh: bool = True) -> tuple[list[AliasListEntry], str | None]:
+    def list_aliases(
+        self,
+        *,
+        refresh: bool = True,
+        include_email: bool = False,
+    ) -> tuple[list[AliasListEntry], str | None]:
         current = self._state.load()
         aliases = self._accounts.list_aliases()
         metadata = self._metadata_by_alias()
         latest_rate_limits = self._latest_rate_limits_by_alias(aliases)
-        entries = self._build_alias_entries(aliases, metadata, latest_rate_limits)
+        entries = self._build_alias_entries(
+            aliases,
+            metadata,
+            latest_rate_limits,
+            include_email=include_email,
+        )
 
         unresolved_aliases = [
             entry.alias
@@ -116,7 +126,12 @@ class CodexSwitchManager:
             if refreshed:
                 metadata = self._metadata_by_alias()
                 latest_rate_limits = self._latest_rate_limits_by_alias(aliases)
-                entries = self._build_alias_entries(aliases, metadata, latest_rate_limits)
+                entries = self._build_alias_entries(
+                    aliases,
+                    metadata,
+                    latest_rate_limits,
+                    include_email=include_email,
+                )
 
         return entries, current.active_alias
 
@@ -147,6 +162,8 @@ class CodexSwitchManager:
         aliases: list[str],
         metadata: dict[str, AliasRecord],
         latest_rate_limits: dict[str, RateLimitRecord],
+        *,
+        include_email: bool = False,
     ) -> list[AliasListEntry]:
         entries: list[AliasListEntry] = []
         for alias in aliases:
@@ -160,6 +177,11 @@ class CodexSwitchManager:
                 AliasListEntry(
                     alias=alias,
                     plan_type=plan_type,
+                    account_email=(
+                        None
+                        if not include_email or alias_metadata is None
+                        else alias_metadata.account_email
+                    ),
                     five_hour_left_percent=_remaining_percent(
                         None if display_rate_limit is None else display_rate_limit.primary_used_percent
                     ),

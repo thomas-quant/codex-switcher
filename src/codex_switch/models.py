@@ -81,6 +81,7 @@ class AutoSourceResult:
 class AliasListEntry:
     alias: str
     plan_type: str | None
+    account_email: str | None = None
     five_hour_left_percent: int | None = None
     weekly_left_percent: int | None = None
 

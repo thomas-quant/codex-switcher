@@ -38,6 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
             child.add_argument("--isolated", action="store_true")
         if name == "list":
             child.add_argument("--refresh", action="store_true")
+            child.add_argument("--email", action="store_true")
 
     daemon_parser = subparsers.add_parser("daemon")
     daemon_subparsers = daemon_parser.add_subparsers(dest="daemon_command", required=True)
@@ -188,15 +189,21 @@ def format_alias_lines(
     entries: list[AliasListEntry],
     active_alias: str | None,
     list_format: ListFormat = ListFormat.LABELLED,
+    show_email: bool = False,
 ) -> list[str]:
     if not entries:
         return ["No aliases configured."]
     if list_format is ListFormat.TABLE:
-        return format_alias_table_lines(entries, active_alias)
-    return format_alias_labelled_lines(entries, active_alias)
+        return format_alias_table_lines(entries, active_alias, show_email=show_email)
+    return format_alias_labelled_lines(entries, active_alias, show_email=show_email)
 
 
-def format_alias_labelled_lines(entries: list[AliasListEntry], active_alias: str | None) -> list[str]:
+def format_alias_labelled_lines(
+    entries: list[AliasListEntry],
+    active_alias: str | None,
+    *,
+    show_email: bool = False,
+) -> list[str]:
     lines: list[str] = []
     for entry in entries:
         prefix = "* " if entry.alias == active_alias else "  "
@@ -204,24 +211,41 @@ def format_alias_labelled_lines(entries: list[AliasListEntry], active_alias: str
         segments = [entry.alias]
         if plan_type:
             segments.append(plan_type)
+        if show_email:
+            segments.append(f"email: {_format_email(entry.account_email)}")
         segments.append(f"5h left: {_format_percent(entry.five_hour_left_percent)}")
         segments.append(f"weekly left: {_format_percent(entry.weekly_left_percent)}")
         lines.append(f"{prefix}{' -- '.join(segments)}")
     return lines
 
 
-def format_alias_table_lines(entries: list[AliasListEntry], active_alias: str | None) -> list[str]:
-    rows = [
-        [
+def format_alias_table_lines(
+    entries: list[AliasListEntry],
+    active_alias: str | None,
+    *,
+    show_email: bool = False,
+) -> list[str]:
+    rows: list[list[str]] = []
+    for entry in entries:
+        row = [
             "*" if entry.alias == active_alias else "",
             entry.alias,
-            "" if entry.plan_type is None else entry.plan_type.strip(),
-            _format_percent(entry.five_hour_left_percent),
-            _format_percent(entry.weekly_left_percent),
         ]
-        for entry in entries
-    ]
-    headers = ["active", "alias", "type", "5h left", "weekly left"]
+        if show_email:
+            row.append(_format_email(entry.account_email))
+        row.extend(
+            [
+                "" if entry.plan_type is None else entry.plan_type.strip(),
+                _format_percent(entry.five_hour_left_percent),
+                _format_percent(entry.weekly_left_percent),
+            ]
+        )
+        rows.append(row)
+
+    headers = ["active", "alias"]
+    if show_email:
+        headers.append("email")
+    headers.extend(["type", "5h left", "weekly left"])
     widths = [
         max(len(headers[index]), *(len(row[index]) for row in rows))
         for index in range(len(headers))
@@ -240,6 +264,13 @@ def format_alias_table_lines(entries: list[AliasListEntry], active_alias: str | 
 
 def _format_percent(value: int | None) -> str:
     return "?" if value is None else f"{value}%"
+
+
+def _format_email(value: str | None) -> str:
+    if value is None:
+        return "?"
+    normalized = value.strip()
+    return normalized if normalized else "?"
 
 
 def format_status_lines(status: StatusResult) -> list[str]:
@@ -356,8 +387,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"active alias: {args.alias}")
         elif args.command == "list":
             config = load_app_config(resolve_paths().config_file)
-            aliases, active_alias = manager.list_aliases(refresh=args.refresh)
-            print(*format_alias_lines(aliases, active_alias, config.list_format), sep="\n")
+            aliases, active_alias = manager.list_aliases(
+                refresh=args.refresh,
+                include_email=args.email,
+            )
+            print(
+                *format_alias_lines(
+                    aliases,
+                    active_alias,
+                    config.list_format,
+                    show_email=args.email,
+                ),
+                sep="\n",
+            )
         elif args.command == "remove":
             manager.remove(args.alias)
             print(f"removed alias: {args.alias}")

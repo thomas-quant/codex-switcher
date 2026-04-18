@@ -84,6 +84,33 @@ def test_list_aliases_uses_cached_plan_types(tmp_path):
     assert active_alias == "beta"
 
 
+def test_list_aliases_includes_cached_account_email(tmp_path):
+    manager, _paths, accounts, state, store, _guard = make_manager(tmp_path)
+    accounts.write_snapshot_from_bytes("beta", b"{}")
+    store.reconcile_aliases(["beta"])
+    store.record_alias_observation(
+        alias="beta",
+        account_email="beta@example.com",
+        account_plan_type="plus",
+        account_fingerprint="fp-beta",
+        observed_at="2026-04-05T00:00:00Z",
+    )
+    state.save(AppState(active_alias="beta", updated_at="2026-04-05T00:00:00Z"))
+
+    entries, active_alias = manager.list_aliases(refresh=False, include_email=True)
+
+    assert entries == [
+        AliasListEntry(
+            alias="beta",
+            plan_type="plus",
+            account_email="beta@example.com",
+            five_hour_left_percent=None,
+            weekly_left_percent=None,
+        )
+    ]
+    assert active_alias == "beta"
+
+
 def test_list_aliases_does_not_create_automation_db_for_cold_cache(tmp_path):
     manager, _paths, accounts, state, store, _guard = make_manager(
         tmp_path,
