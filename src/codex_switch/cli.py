@@ -39,6 +39,9 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "list":
             child.add_argument("--refresh", action="store_true")
             child.add_argument("--email", action="store_true")
+            format_group = child.add_mutually_exclusive_group()
+            format_group.add_argument("--table", action="store_true")
+            format_group.add_argument("--labelled", action="store_true")
 
     daemon_parser = subparsers.add_parser("daemon")
     daemon_subparsers = daemon_parser.add_subparsers(dest="daemon_command", required=True)
@@ -273,6 +276,14 @@ def _format_email(value: str | None) -> str:
     return normalized if normalized else "?"
 
 
+def _resolve_list_format(*, config_format: ListFormat, force_table: bool, force_labelled: bool) -> ListFormat:
+    if force_table:
+        return ListFormat.TABLE
+    if force_labelled:
+        return ListFormat.LABELLED
+    return config_format
+
+
 def format_status_lines(status: StatusResult) -> list[str]:
     if status.active_alias is None:
         return [
@@ -387,6 +398,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"active alias: {args.alias}")
         elif args.command == "list":
             config = load_app_config(resolve_paths().config_file)
+            list_format = _resolve_list_format(
+                config_format=config.list_format,
+                force_table=args.table,
+                force_labelled=args.labelled,
+            )
             aliases, active_alias = manager.list_aliases(
                 refresh=args.refresh,
                 include_email=args.email,
@@ -395,7 +411,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 *format_alias_lines(
                     aliases,
                     active_alias,
-                    config.list_format,
+                    list_format,
                     show_email=args.email,
                 ),
                 sep="\n",

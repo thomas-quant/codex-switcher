@@ -108,6 +108,33 @@ def test_build_parser_list_accepts_email_flag():
     assert namespace.email is True
 
 
+def test_build_parser_list_accepts_table_flag():
+    parser = build_parser()
+
+    namespace = parser.parse_args(["list", "--table"])
+
+    assert namespace.command == "list"
+    assert namespace.table is True
+    assert namespace.labelled is False
+
+
+def test_build_parser_list_accepts_labelled_flag():
+    parser = build_parser()
+
+    namespace = parser.parse_args(["list", "--labelled"])
+
+    assert namespace.command == "list"
+    assert namespace.labelled is True
+    assert namespace.table is False
+
+
+def test_build_parser_list_rejects_table_and_labelled_together():
+    parser = build_parser()
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["list", "--table", "--labelled"])
+
+
 def test_build_default_manager_threads_login_mode_through_runner(monkeypatch):
     captured: dict[str, object] = {}
 
@@ -1003,6 +1030,72 @@ def test_main_list_uses_configured_table_format(monkeypatch, capsys):
         "active  alias  type  5h left  weekly left",
         "------  -----  ----  -------  -----------",
         "*       beta   plus  42%      71%",
+    ]
+
+
+def test_main_list_table_flag_overrides_labelled_config(monkeypatch, capsys):
+    class FakeManager:
+        def list_aliases(self, *, refresh: bool = True, include_email: bool = False):
+            assert include_email is False
+            return (
+                [
+                    AliasListEntry(
+                        alias="beta",
+                        plan_type="plus",
+                        five_hour_left_percent=42,
+                        weekly_left_percent=71,
+                    )
+                ],
+                "beta",
+            )
+
+    monkeypatch.setattr("codex_switch.cli.build_default_manager", lambda: FakeManager())
+    monkeypatch.setattr(
+        "codex_switch.cli.load_app_config",
+        lambda _path: AppConfig(list_format=ListFormat.LABELLED),
+    )
+    monkeypatch.setattr(
+        "codex_switch.cli.resolve_paths",
+        lambda: SimpleNamespace(config_file=object()),
+    )
+
+    assert main(["list", "--table"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "active  alias  type  5h left  weekly left",
+        "------  -----  ----  -------  -----------",
+        "*       beta   plus  42%      71%",
+    ]
+
+
+def test_main_list_labelled_flag_overrides_table_config(monkeypatch, capsys):
+    class FakeManager:
+        def list_aliases(self, *, refresh: bool = True, include_email: bool = False):
+            assert include_email is False
+            return (
+                [
+                    AliasListEntry(
+                        alias="beta",
+                        plan_type="plus",
+                        five_hour_left_percent=42,
+                        weekly_left_percent=71,
+                    )
+                ],
+                "beta",
+            )
+
+    monkeypatch.setattr("codex_switch.cli.build_default_manager", lambda: FakeManager())
+    monkeypatch.setattr(
+        "codex_switch.cli.load_app_config",
+        lambda _path: AppConfig(list_format=ListFormat.TABLE),
+    )
+    monkeypatch.setattr(
+        "codex_switch.cli.resolve_paths",
+        lambda: SimpleNamespace(config_file=object()),
+    )
+
+    assert main(["list", "--labelled"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "* beta -- plus -- 5h left: 42% -- weekly left: 71%",
     ]
 
 
